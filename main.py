@@ -103,6 +103,7 @@ class AudioPlayer:
     def __init__(self):
         self.audio = pyaudio.PyAudio()
         self.output_stream = None
+        self.current_playback_task = None
         
     def start_output_stream(self):
         """Start the output audio stream"""
@@ -114,20 +115,41 @@ class AudioPlayer:
             frames_per_buffer=CHUNK
         )
         
-    def play_audio_data(self, audio_data):
-        """Play audio data in real-time"""
+    async def play_audio_data(self, audio_data):
+        """Play audio data asynchronously"""
         try:
             if self.output_stream is None:
                 self.start_output_stream()
             
-            # Play the audio data immediately
-            self.output_stream.write(audio_data)
+            # Cancel any existing playback
+            if self.current_playback_task and not self.current_playback_task.done():
+                self.current_playback_task.cancel()
+            
+            # Create new playback task
+            self.current_playback_task = asyncio.create_task(self._play_audio_async(audio_data))
             
         except Exception as e:
             print(f"Error playing audio: {e}")
     
+    async def _play_audio_async(self, audio_data):
+        """Async method to play audio data"""
+        try:
+            # Play the audio data in a single write to maintain proper timing
+            self.output_stream.write(audio_data)
+        except asyncio.CancelledError:
+            # Audio playback was cancelled (interrupted)
+            pass
+        except Exception as e:
+            print(f"Error in async audio playback: {e}")
+    
+    def stop_current_playback(self):
+        """Stop current audio playback"""
+        if self.current_playback_task and not self.current_playback_task.done():
+            self.current_playback_task.cancel()
+    
     def close(self):
         """Close the audio stream"""
+        self.stop_current_playback()
         if self.output_stream:
             self.output_stream.stop_stream()
             self.output_stream.close()
@@ -169,9 +191,15 @@ async def process_realtime_voice():
                     # Use a very short timeout just to check for responses
                     response = await asyncio.wait_for(session.receive().__anext__(), timeout=0.01)
                     
-                    if response.data is not None:
-                        # Play audio response immediately
-                        player.play_audio_data(response.data)
+                    # Handle interruptions first (immediate priority)
+                    if response.server_content and response.server_content.interrupted is True:
+                        print("\n🔄 Interrupted - listening for new input...")
+                        # Stop current audio playback when interrupted
+                        player.stop_current_playback()
+                    
+                    elif response.data is not None:
+                        # Play audio response asynchronously
+                        await player.play_audio_data(response.data)
                     
                     # Handle tool calls
                     elif response.tool_call:
