@@ -7,5 +7,6 @@ requires-python = ">=3.11"
 dependencies = [
     "google-genai",
     "librosa",
-    "soundfile"
+    "soundfile",
+    "python-dotenv"
 ]
