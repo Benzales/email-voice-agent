@@ -102,40 +102,36 @@ class AudioRecorder:
 class AudioPlayer:
     def __init__(self):
         self.audio = pyaudio.PyAudio()
-        self.audio_buffer = b''
-        self.is_playing = False
+        self.output_stream = None
         
-    def add_audio_data(self, audio_data):
-        """Add audio data to buffer"""
-        self.audio_buffer += audio_data
+    def start_output_stream(self):
+        """Start the output audio stream"""
+        self.output_stream = self.audio.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=24000,
+            output=True,
+            frames_per_buffer=CHUNK
+        )
         
-    def play_buffered_audio(self, sample_rate=24000):
-        """Play all buffered audio data smoothly"""
-        if not self.audio_buffer or self.is_playing:
-            return
-            
-        self.is_playing = True
+    def play_audio_data(self, audio_data):
+        """Play audio data in real-time"""
         try:
-            stream = self.audio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=sample_rate,
-                output=True,
-                frames_per_buffer=CHUNK
-            )
+            if self.output_stream is None:
+                self.start_output_stream()
             
-            # Play the buffered audio data
-            stream.write(self.audio_buffer)
-            stream.stop_stream()
-            stream.close()
-            
-            # Clear buffer after playing
-            self.audio_buffer = b''
+            # Play the audio data immediately
+            self.output_stream.write(audio_data)
             
         except Exception as e:
             print(f"Error playing audio: {e}")
-        finally:
-            self.is_playing = False
+    
+    def close(self):
+        """Close the audio stream"""
+        if self.output_stream:
+            self.output_stream.stop_stream()
+            self.output_stream.close()
+        self.audio.terminate()
 
 async def process_realtime_voice():
     """
@@ -157,6 +153,9 @@ async def process_realtime_voice():
             # Start recording
             recorder.start_recording()
             
+            # Start audio output stream
+            player.start_output_stream()
+            
             # Send audio data continuously
             while True:
                 audio_data = recorder.get_audio_data()
@@ -165,19 +164,17 @@ async def process_realtime_voice():
                         audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
                     )
                 
-                # Check for responses
+                # Process responses without timeout
                 try:
-                    response = await asyncio.wait_for(session.receive().__anext__(), timeout=0.1)
+                    # Use a very short timeout just to check for responses
+                    response = await asyncio.wait_for(session.receive().__anext__(), timeout=0.01)
                     
                     if response.data is not None:
-                        # Add audio data to buffer
-                        player.add_audio_data(response.data)
+                        # Play audio response immediately
+                        player.play_audio_data(response.data)
                     
                     # Handle tool calls
                     elif response.tool_call:
-                        # Play any buffered audio before tool response
-                        player.play_buffered_audio()
-                        
                         function_responses = []
                         for fc in response.tool_call.function_calls:
                             print(f"\n🔧 Tool called: {fc.name}")
@@ -202,116 +199,18 @@ async def process_realtime_voice():
                         await session.send_tool_response(function_responses=function_responses)
                         
                 except asyncio.TimeoutError:
-                    # No response yet, try to play buffered audio
-                    if player.audio_buffer and not player.is_playing:
-                        player.play_buffered_audio()
+                    # No response yet, continue recording
                     pass
                 
-                await asyncio.sleep(0.1)  # Small delay to prevent blocking
+                # Very short delay to prevent blocking
+                await asyncio.sleep(0.01)
                     
         except KeyboardInterrupt:
             print("\n\n👋 Exiting...")
         finally:
             recorder.stop_recording()
             recorder.audio.terminate()
-            player.audio.terminate()
-
-async def process_voice_command(audio_file_path: str, output_file_path: str = None):
-    """
-    Process a voice command using Gemini's audio capabilities with tool support.
-    
-    Args:
-        audio_file_path: Path to the audio file containing the voice command
-        output_file_path: Path for the output response file (optional)
-    """
-    if output_file_path is None:
-        # Create output filename based on input filename
-        input_path = Path(audio_file_path)
-        output_file_path = f"response_{input_path.stem}.wav"
-    
-    async with client.aio.live.connect(model=model, config=config) as session:
-        
-        # Load and convert audio to the required format
-        buffer = io.BytesIO()
-        y, sr = librosa.load(audio_file_path, sr=16000)
-        sf.write(buffer, y, sr, format='RAW', subtype='PCM_16')
-        buffer.seek(0)
-        audio_bytes = buffer.read()
-
-        # Send the audio input to Gemini
-        await session.send_realtime_input(
-            audio=types.Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000")
-        )
-
-        # Set up output audio file
-        wf = wave.open(output_file_path, "wb")
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(24000)  # Output is 24kHz
-
-        # Process the response
-        async for response in session.receive():
-            if response.data is not None:
-                wf.writeframes(response.data)
-            
-            # Handle tool calls
-            elif response.tool_call:
-                function_responses = []
-                for fc in response.tool_call.function_calls:
-                    print(f"🔧 Tool called: {fc.name}")
-                    
-                    # Handle different tool functions
-                    if fc.name == "markUnread":
-                        result = "Email marked as unread successfully"
-                        print("📧 Marking email as unread...")
-                    elif fc.name == "archive":
-                        result = "Email archived successfully"
-                        print("📁 Archiving email...")
-                    else:
-                        result = "Unknown tool called"
-                    
-                    function_response = types.FunctionResponse(
-                        id=fc.id,
-                        name=fc.name,
-                        response={"result": result}
-                    )
-                    function_responses.append(function_response)
-
-                await session.send_tool_response(function_responses=function_responses)
-
-            # Un-comment this code to print audio data info
-            # if response.server_content.model_turn is not None:
-            #      print(response.server_content.model_turn.parts[0].inline_data.mime_type)
-
-        wf.close()
-        print(f"Voice response saved to '{output_file_path}'")
-
-async def process_all_input_files():
-    """
-    Process all WAV files in the input folder and create response files.
-    """
-    input_folder = Path("input")
-    
-    if not input_folder.exists():
-        print("❌ Error: 'input' folder not found")
-        return
-    
-    wav_files = list(input_folder.glob("*.wav"))
-    
-    if not wav_files:
-        print("❌ No WAV files found in 'input' folder")
-        return
-    
-    print(f"🎵 Found {len(wav_files)} WAV files to process")
-    
-    for wav_file in wav_files:
-        print(f"\n🎤 Processing: {wav_file.name}")
-        try:
-            output_file = f"response_{wav_file.stem}.wav"
-            await process_voice_command(str(wav_file), output_file)
-            print(f"✅ Successfully processed {wav_file.name}")
-        except Exception as e:
-            print(f"❌ Error processing {wav_file.name}: {e}")
+            player.close()
 
 async def main():
     """
