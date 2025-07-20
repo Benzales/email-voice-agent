@@ -15,6 +15,7 @@ import librosa
 import pyaudio
 import threading
 import queue
+import tempfile
 
 # Load environment variables from .env file
 load_dotenv()
@@ -47,7 +48,7 @@ tools = [{"function_declarations": [print_mark_unread, print_archive]}]
 
 # System instruction for email agent context
 config = {
-    "response_modalities": ["TEXT"],
+    "response_modalities": ["AUDIO"],
     "tools": tools,
 }
 
@@ -98,17 +99,57 @@ class AudioRecorder:
             audio_data += self.audio_queue.get()
         return audio_data
 
+class AudioPlayer:
+    def __init__(self):
+        self.audio = pyaudio.PyAudio()
+        self.audio_buffer = b''
+        self.is_playing = False
+        
+    def add_audio_data(self, audio_data):
+        """Add audio data to buffer"""
+        self.audio_buffer += audio_data
+        
+    def play_buffered_audio(self, sample_rate=24000):
+        """Play all buffered audio data smoothly"""
+        if not self.audio_buffer or self.is_playing:
+            return
+            
+        self.is_playing = True
+        try:
+            stream = self.audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=sample_rate,
+                output=True,
+                frames_per_buffer=CHUNK
+            )
+            
+            # Play the buffered audio data
+            stream.write(self.audio_buffer)
+            stream.stop_stream()
+            stream.close()
+            
+            # Clear buffer after playing
+            self.audio_buffer = b''
+            
+        except Exception as e:
+            print(f"Error playing audio: {e}")
+        finally:
+            self.is_playing = False
+
 async def process_realtime_voice():
     """
-    Process real-time voice input with VAD and stream text responses.
+    Process real-time voice input with VAD and stream audio responses.
     """
     recorder = AudioRecorder()
+    player = AudioPlayer()
     
     async with client.aio.live.connect(model=model, config=config) as session:
         
         print("🎤 Voice-driven Email Agent Ready!")
         print("🔧 Available tools: Mark Unread, Archive")
         print("💬 Speak your email command (VAD enabled - will auto-detect speech)")
+        print("🔊 Audio responses will play automatically")
         print("Press Ctrl+C to exit")
         print("\n" + "="*50)
         
@@ -128,11 +169,15 @@ async def process_realtime_voice():
                 try:
                     response = await asyncio.wait_for(session.receive().__anext__(), timeout=0.1)
                     
-                    if response.text is not None:
-                        print(response.text, end='', flush=True)
+                    if response.data is not None:
+                        # Add audio data to buffer
+                        player.add_audio_data(response.data)
                     
                     # Handle tool calls
                     elif response.tool_call:
+                        # Play any buffered audio before tool response
+                        player.play_buffered_audio()
+                        
                         function_responses = []
                         for fc in response.tool_call.function_calls:
                             print(f"\n🔧 Tool called: {fc.name}")
@@ -157,7 +202,9 @@ async def process_realtime_voice():
                         await session.send_tool_response(function_responses=function_responses)
                         
                 except asyncio.TimeoutError:
-                    # No response yet, continue recording
+                    # No response yet, try to play buffered audio
+                    if player.audio_buffer and not player.is_playing:
+                        player.play_buffered_audio()
                     pass
                 
                 await asyncio.sleep(0.1)  # Small delay to prevent blocking
@@ -167,6 +214,7 @@ async def process_realtime_voice():
         finally:
             recorder.stop_recording()
             recorder.audio.terminate()
+            player.audio.terminate()
 
 async def process_voice_command(audio_file_path: str, output_file_path: str = None):
     """
