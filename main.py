@@ -12,6 +12,9 @@ from google import genai
 from google.genai import types
 import soundfile as sf
 import librosa
+import pyaudio
+import threading
+import queue
 
 # Load environment variables from .env file
 load_dotenv()
@@ -44,9 +47,126 @@ tools = [{"function_declarations": [print_mark_unread, print_archive]}]
 
 # System instruction for email agent context
 config = {
-    "response_modalities": ["AUDIO"],
+    "response_modalities": ["TEXT"],
     "tools": tools,
 }
+
+# Audio recording parameters
+CHUNK = 1024
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+RATE = 16000
+
+class AudioRecorder:
+    def __init__(self):
+        self.audio = pyaudio.PyAudio()
+        self.frames = []
+        self.is_recording = False
+        self.audio_queue = queue.Queue()
+        
+    def start_recording(self):
+        self.is_recording = True
+        self.frames = []
+        
+        def callback(in_data, frame_count, time_info, status):
+            if self.is_recording:
+                self.audio_queue.put(in_data)
+            return (in_data, pyaudio.paContinue)
+        
+        self.stream = self.audio.open(
+            format=FORMAT,
+            channels=CHANNELS,
+            rate=RATE,
+            input=True,
+            frames_per_buffer=CHUNK,
+            stream_callback=callback
+        )
+        self.stream.start_stream()
+        print("🎤 Recording started... (speak now)")
+        
+    def stop_recording(self):
+        self.is_recording = False
+        if hasattr(self, 'stream'):
+            self.stream.stop_stream()
+            self.stream.close()
+        print("⏹️  Recording stopped")
+        
+    def get_audio_data(self):
+        """Get all recorded audio data as PCM bytes"""
+        audio_data = b''
+        while not self.audio_queue.empty():
+            audio_data += self.audio_queue.get()
+        return audio_data
+
+async def process_realtime_voice():
+    """
+    Process real-time voice input with VAD and stream text responses.
+    """
+    recorder = AudioRecorder()
+    
+    async with client.aio.live.connect(model=model, config=config) as session:
+        
+        print("🎤 Voice-driven Email Agent Ready!")
+        print("🔧 Available tools: Mark Unread, Archive")
+        print("💬 Speak your email command (VAD enabled - will auto-detect speech)")
+        print("Press Ctrl+C to exit")
+        print("\n" + "="*50)
+        
+        try:
+            # Start recording
+            recorder.start_recording()
+            
+            # Send audio data continuously
+            while True:
+                audio_data = recorder.get_audio_data()
+                if audio_data:
+                    await session.send_realtime_input(
+                        audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
+                    )
+                
+                # Check for responses
+                try:
+                    response = await asyncio.wait_for(session.receive().__anext__(), timeout=0.1)
+                    
+                    if response.text is not None:
+                        print(response.text, end='', flush=True)
+                    
+                    # Handle tool calls
+                    elif response.tool_call:
+                        function_responses = []
+                        for fc in response.tool_call.function_calls:
+                            print(f"\n🔧 Tool called: {fc.name}")
+                            
+                            # Handle different tool functions
+                            if fc.name == "markUnread":
+                                result = "Email marked as unread successfully"
+                                print("📧 Marking email as unread...")
+                            elif fc.name == "archive":
+                                result = "Email archived successfully"
+                                print("📁 Archiving email...")
+                            else:
+                                result = "Unknown tool called"
+                            
+                            function_response = types.FunctionResponse(
+                                id=fc.id,
+                                name=fc.name,
+                                response={"result": result}
+                            )
+                            function_responses.append(function_response)
+
+                        await session.send_tool_response(function_responses=function_responses)
+                        
+                except asyncio.TimeoutError:
+                    # No response yet, continue recording
+                    pass
+                
+                await asyncio.sleep(0.1)  # Small delay to prevent blocking
+                    
+        except KeyboardInterrupt:
+            print("\n\n👋 Exiting...")
+        finally:
+            recorder.stop_recording()
+            recorder.audio.terminate()
 
 async def process_voice_command(audio_file_path: str, output_file_path: str = None):
     """
@@ -93,10 +213,10 @@ async def process_voice_command(audio_file_path: str, output_file_path: str = No
                     print(f"🔧 Tool called: {fc.name}")
                     
                     # Handle different tool functions
-                    if fc.name == "printMarkUnread":
+                    if fc.name == "markUnread":
                         result = "Email marked as unread successfully"
                         print("📧 Marking email as unread...")
-                    elif fc.name == "printArchive":
+                    elif fc.name == "archive":
                         result = "Email archived successfully"
                         print("📁 Archiving email...")
                     else:
@@ -152,11 +272,10 @@ async def main():
     print("🎤 Voice-driven Email Agent Starting...")
     print("📧 Ready to process email commands by voice")
     print("🔧 Available tools: Mark Unread, Archive")
-    print("📁 Processing all WAV files in 'input' folder...")
+    print("🎙️  Starting real-time voice input...")
     
     try:
-        await process_all_input_files()
-        print("\n🎉 All files processed successfully!")
+        await process_realtime_voice()
     except Exception as e:
         print(f"❌ Error: {e}")
 

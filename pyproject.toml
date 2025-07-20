@@ -8,5 +8,6 @@ dependencies = [
     "google-genai",
     "librosa",
     "soundfile",
-    "python-dotenv"
+    "python-dotenv",
+    "pyaudio"
 ]
