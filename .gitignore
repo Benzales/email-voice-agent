@@ -1,3 +1,7 @@
+# OAuth Credentials
+credentials.json
+token.pickle
+
 # Environment variables
 .env
 .env.local
