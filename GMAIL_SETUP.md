@@ -111,9 +111,10 @@ Once set up, your voice agent can:
 ## Voice Commands Examples
 
 - "Read my latest unread email"
-- "Mark this email as unread"
-- "Archive this email"
-- "Delete this email"
+- "Mark this email as unread" (queued for execution)
+- "Archive this email" (queued for execution)
+- "Delete this email" (queued for execution)
+- "Undo" (cancel the queued action)
 - "List emails from John"
 
 ## Next Steps

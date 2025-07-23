@@ -74,6 +74,11 @@ get_inbox_stats_tool = {
     "description": "Get statistics about the inbox (total emails, unread count, etc.)"
 }
 
+undo_action_tool = {
+    "name": "undoAction",
+    "description": "Cancel the currently pending action before it's executed."
+}
+
 tools = [{"function_declarations": [
     get_next_email_tool,
     mark_unread_tool, 
@@ -81,7 +86,8 @@ tools = [{"function_declarations": [
     archive_tool, 
     delete_tool,
     read_content_tool,
-    get_inbox_stats_tool
+    get_inbox_stats_tool,
+    undo_action_tool
 ]}]
 
 # System instruction for email agent context
@@ -91,30 +97,40 @@ system_instruction = """You are a voice-driven email assistant dedicated to help
 
 You operate in a continuous inbox clearing mode:
 1. Announce each email's sender and subject clearly and concisely
-2. Wait for the user's action command (archive, delete, mark as read/unread, read content)
-3. Execute the action and automatically move to the next email
+2. Wait for the user's action command (archive, delete, mark as read/unread, read content, undo)
+3. Queue the action and automatically move to the next email
 4. Continue until all emails are processed
+
+## Action Undo System:
+- Actions that change email state (archive, delete, mark as read/unread) are QUEUED first, not executed immediately
+- Actions are only executed when the next state-changing action is requested or when moving to the next email
+- Users can say "undo" to cancel the currently queued action
+- Reading content does NOT change state, so it executes immediately
+- The final queued action is automatically executed when the session ends
 
 ## Key behaviors:
 - Keep responses extremely concise - just sender and subject
-- ALWAYS automatically call getNextEmail after completing an action (except when reading content)
+- ALWAYS automatically call getNextEmail after queueing an action
 - When inbox is cleared, announce completion with stats
 - Be efficient and focused on helping users process emails quickly
+- Clearly indicate when actions are queued vs executed
 
 ## Available actions for each email:
-- Archive - removes from inbox
-- Delete - moves to trash
-- Mark as read/unread - changes read status
-- Read content - reads the full email body aloud
+- Archive - removes from inbox (queued)
+- Delete - moves to trash (queued)
+- Mark as read/unread - changes read status (queued)
+- Read content - reads the full email body aloud (immediate)
+- Undo - cancels the currently queued action
 - If the user says 'skip', treat it as 'mark as unread'
 
 ## Voice interactions:
 - Speak clearly and at a moderate pace
 - Use natural pauses between emails
-- Confirm actions briefly (e.g., "Archived", "Deleted")
+- Confirm when actions are queued (e.g., "Archive queued", "Delete queued")
+- Announce when actions are executed (e.g., "Archived", "Deleted")
 - When reading content, read it clearly and completely
 
-Focus on speed and efficiency to help users achieve inbox zero."""
+Focus on speed and efficiency to help users achieve inbox zero with the safety of undo capability."""
 
 config = {
     "response_modalities": ["AUDIO"],
@@ -338,6 +354,8 @@ async def process_realtime_voice():
                                 # Exit if all emails processed
                                 if should_exit:
                                     print("\n👋 All emails processed. Exiting...")
+                                    # Execute final action before exiting
+                                    tool_handlers.execute_final_action()
                                     raise KeyboardInterrupt()
 
                             await session.send_tool_response(function_responses=function_responses)
@@ -367,6 +385,9 @@ async def process_realtime_voice():
         except KeyboardInterrupt:
             print("\n\n👋 Exiting...")
         finally:
+            # Execute any pending action before closing
+            tool_handlers.execute_final_action()
+            
             # Cancel audio streaming task
             if 'audio_task' in locals():
                 audio_task.cancel()
