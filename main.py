@@ -344,7 +344,7 @@ async def process_realtime_voice():
             player.start_output_stream()
             
             # Flag to track if we should auto-get next email
-            should_get_next_email = True  # Start with first email
+            should_get_next_email = False  # Will be set by tool handlers
             
             # Create a separate task for audio streaming
             async def stream_audio():
@@ -360,16 +360,10 @@ async def process_realtime_voice():
             # Start the audio streaming task
             audio_task = asyncio.create_task(stream_audio())
             
-            # Auto-trigger first email
-            if should_get_next_email:
-                should_get_next_email = False
-                await session.send_tool_response(function_responses=[
-                    types.FunctionResponse(
-                        id="auto_next",
-                        name="getNextEmail",
-                        response={"trigger": "auto"}
-                    )
-                ])
+            # Send artificial introductory message to kickstart the conversation
+            await session.send_realtime_input(
+                text="Hello! Please introduce yourself as my voice-driven email assistant that will help to clear my inbox and then say let's start with your most recent email."
+            )
             
             # Keep the session running continuously
             while True:
