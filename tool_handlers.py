@@ -5,6 +5,14 @@ Handles all tool function calls from the Gemini API
 
 from gmail_service import GmailService
 
+class PendingAction:
+    """Represents a pending action that can be executed or undone"""
+    def __init__(self, action_type, email_id, handler_method, description):
+        self.action_type = action_type
+        self.email_id = email_id  
+        self.handler_method = handler_method
+        self.description = description
+
 class ToolHandlers:
     def __init__(self, gmail_service: GmailService):
         """
@@ -18,6 +26,60 @@ class ToolHandlers:
         self.emails_processed = 0
         self.should_get_next_email = False
         
+        # Action undo mechanism
+        self.pending_action = None
+        
+    def _execute_pending_action(self):
+        """Execute the currently pending action, if any"""
+        if self.pending_action:
+            print(f"🔄 Executing pending action: {self.pending_action.description}")
+            success = self.pending_action.handler_method(self.pending_action.email_id)
+            if success:
+                self.emails_processed += 1
+                self.should_get_next_email = True
+                print(f"✅ {self.pending_action.description}")
+            else:
+                print(f"❌ Failed to {self.pending_action.description.lower()}")
+            self.pending_action = None
+            return success
+        return False
+        
+    def execute_final_action(self):
+        """Execute any remaining pending action before session ends"""
+        if self.pending_action:
+            print(f"\n🏁 Executing final pending action before exit: {self.pending_action.description}")
+            return self._execute_pending_action()
+        return False
+        
+    def _store_action(self, action_type, handler_method, description):
+        """Store an action for later execution"""
+        if self.current_email_id:
+            # Execute any existing pending action first
+            self._execute_pending_action()
+            
+            # Store the new action
+            self.pending_action = PendingAction(
+                action_type=action_type,
+                email_id=self.current_email_id,
+                handler_method=handler_method,
+                description=description
+            )
+            print(f"📝 Action queued: {description} (will execute when next action is requested)")
+            return f"Action queued: {description}. Say 'undo' to cancel, or request another action to confirm."
+        else:
+            return "No email currently selected."
+    
+    def _go_back_to_previous_email(self):
+        """Go back to the previous email by decrementing the index"""
+        if self.gmail_service.current_email_index > 0:
+            # Go back to previous email
+            self.gmail_service.current_email_index -= 2  # -2 because get_next_email will increment by 1
+            email, remaining = self.gmail_service.get_next_email()
+            if email:
+                self.current_email_id = email['id']
+                return f"Went back to previous email from {email['sender']}. Subject: {email['subject']}."
+        return "Cannot go back to previous email."
+            
     def handle_get_next_email(self):
         """
         Get the next email in the inbox clearing sequence
@@ -25,6 +87,8 @@ class ToolHandlers:
         Returns:
             Tuple of (result_message, should_exit)
         """
+        # Removed _execute_pending_action() call - actions only execute when new actions are requested
+        
         email, remaining = self.gmail_service.get_next_email()
         if email:
             self.current_email_id = email['id']
@@ -44,79 +108,82 @@ class ToolHandlers:
             
     def handle_mark_unread(self):
         """
-        Mark the current email as unread
+        Mark the current email as unread (stores action for later execution)
         
         Returns:
             Result message
         """
-        if self.current_email_id:
-            success = self.gmail_service.mark_as_unread(self.current_email_id)
-            result = "Marked as unread." if success else "Failed to mark as unread."
-            if success:
-                self.emails_processed += 1
-                self.should_get_next_email = True
-            print(f"📧 {result}")
-            return result
-        else:
-            return "No email currently selected."
+        return self._store_action(
+            action_type="mark_unread",
+            handler_method=self.gmail_service.mark_as_unread,
+            description="Mark as unread"
+        )
             
     def handle_mark_read(self):
         """
-        Mark the current email as read
+        Mark the current email as read (stores action for later execution)
         
         Returns:
             Result message
         """
-        if self.current_email_id:
-            success = self.gmail_service.mark_as_read(self.current_email_id)
-            result = "Marked as read." if success else "Failed to mark as read."
-            if success:
-                self.emails_processed += 1
-                self.should_get_next_email = True
-            print(f"📧 {result}")
-            return result
-        else:
-            return "No email currently selected."
+        return self._store_action(
+            action_type="mark_read", 
+            handler_method=self.gmail_service.mark_as_read,
+            description="Mark as read"
+        )
             
     def handle_archive(self):
         """
-        Archive the current email
+        Archive the current email (stores action for later execution)
         
         Returns:
             Result message
         """
-        if self.current_email_id:
-            success = self.gmail_service.archive_message(self.current_email_id)
-            result = "Archived." if success else "Failed to archive."
-            if success:
-                self.emails_processed += 1
-                self.should_get_next_email = True
-            print(f"📁 {result}")
-            return result
-        else:
-            return "No email currently selected."
+        return self._store_action(
+            action_type="archive",
+            handler_method=self.gmail_service.archive_message,
+            description="Archive"
+        )
             
     def handle_delete_email(self):
         """
-        Delete the current email (move to trash)
+        Delete the current email (stores action for later execution)
         
         Returns:
             Result message
         """
-        if self.current_email_id:
-            success = self.gmail_service.delete_message(self.current_email_id)
-            result = "Deleted." if success else "Failed to delete."
-            if success:
-                self.emails_processed += 1
-                self.should_get_next_email = True
-            print(f"🗑️  {result}")
+        return self._store_action(
+            action_type="delete",
+            handler_method=self.gmail_service.delete_message,
+            description="Delete"
+        )
+    
+    def handle_undo_action(self):
+        """
+        Cancel the currently pending action and go back to the previous email
+        
+        Returns:
+            Result message
+        """
+        if self.pending_action:
+            cancelled_action = self.pending_action.description
+            self.pending_action = None
+            
+            # Go back to the previous email
+            back_result = self._go_back_to_previous_email()
+            
+            result = f"Cancelled: {cancelled_action}. {back_result}"
+            print(f"↩️  Cancelled: {cancelled_action}")
+            print(f"⬅️  {back_result}")
             return result
         else:
-            return "No email currently selected."
+            result = "No action to undo."
+            print(f"❌ {result}")
+            return result
             
     def handle_read_email_content(self):
         """
-        Read the body content of the current email
+        Read the body content of the current email (immediate execution - no state change)
         
         Returns:
             Result message with email body content only
@@ -138,7 +205,7 @@ class ToolHandlers:
             
     def handle_get_inbox_stats(self):
         """
-        Get inbox statistics
+        Get inbox statistics (immediate execution - no state change)
         
         Returns:
             Result message
@@ -179,6 +246,9 @@ class ToolHandlers:
             
         elif function_call.name == "deleteEmail":
             result = self.handle_delete_email()
+            
+        elif function_call.name == "undoAction":
+            result = self.handle_undo_action()
             
         elif function_call.name == "readEmailContent":
             result = self.handle_read_email_content()
