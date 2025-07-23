@@ -239,7 +239,7 @@ class ToolHandlers:
         draft = self.gmail_service.create_draft_reply(self.current_email_id, reply_body)
         if draft:
             self.current_draft_id = draft['id']
-            result = "Draft reply created successfully."
+            result = "Draft reply created and saved. You can now read the draft, edit it, send it, or get the next email to save this draft for later."
             print(f"📝 Draft reply created: {self.current_draft_id}")
             return result
         else:
@@ -260,8 +260,11 @@ class ToolHandlers:
         
         updated_draft = self.gmail_service.update_draft(self.current_draft_id, new_body)
         if updated_draft:
+            # Update the current draft ID since a new draft was created
+            old_draft_id = self.current_draft_id
+            self.current_draft_id = updated_draft['id']
             result = "Draft updated successfully."
-            print(f"✏️  Draft updated: {self.current_draft_id}")
+            print(f"✏️  Draft updated: {old_draft_id} -> {self.current_draft_id}")
             return result
         else:
             return "Failed to update draft."
@@ -306,6 +309,8 @@ class ToolHandlers:
             return result
         else:
             return "Failed to send draft."
+    
+
         
     def process_tool_call(self, function_call):
         """

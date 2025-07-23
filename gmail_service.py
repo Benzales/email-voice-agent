@@ -493,50 +493,68 @@ class GmailService:
             # Get the existing draft
             existing_draft = self.service.users().drafts().get(
                 userId='me',
+                id=draft_id,
+                format='full'
+            ).execute()
+            
+            if not existing_draft or 'message' not in existing_draft:
+                return None
+            
+            message = existing_draft['message']
+            headers = {}
+            
+            # Try to get headers from payload first
+            if 'payload' in message and 'headers' in message['payload']:
+                for header in message['payload']['headers']:
+                    headers[header['name']] = header['value']
+            
+            # Fallback: decode raw message if payload method fails
+            elif 'raw' in message:
+                try:
+                    existing_decoded = base64.urlsafe_b64decode(message['raw']).decode('utf-8')
+                    
+                    # Extract headers from existing message
+                    lines = existing_decoded.split('\n')
+                    
+                    for line in lines:
+                        if line.strip() == '':
+                            break
+                        if ':' in line:
+                            key, value = line.split(':', 1)
+                            headers[key.strip()] = value.strip()
+                except Exception as e:
+                    print(f'Error decoding existing draft: {e}')
+                    # Continue with empty headers if decoding fails
+            
+            # Create new message with updated body
+            new_message = MIMEText(new_body)
+            for key, value in headers.items():
+                if key.lower() not in ['content-type', 'content-transfer-encoding', 'mime-version']:
+                    new_message[key] = value
+            
+            # The Gmail API requires us to delete the old draft and create a new one
+            # This is the standard pattern for "updating" drafts
+            
+            # First delete the existing draft
+            self.service.users().drafts().delete(
+                userId='me',
                 id=draft_id
             ).execute()
             
-            if not existing_draft:
-                return None
-            
-            # Decode the existing message to get headers
-            existing_raw = existing_draft['message']['raw']
-            existing_decoded = base64.urlsafe_b64decode(existing_raw).decode('utf-8')
-            
-            # Extract headers from existing message
-            lines = existing_decoded.split('\n')
-            headers = {}
-            body_start = 0
-            
-            for i, line in enumerate(lines):
-                if line.strip() == '':
-                    body_start = i + 1
-                    break
-                if ':' in line:
-                    key, value = line.split(':', 1)
-                    headers[key.strip()] = value.strip()
-            
-            # Create new message with updated body
-            message = MIMEText(new_body)
-            for key, value in headers.items():
-                if key.lower() not in ['content-type', 'content-transfer-encoding', 'mime-version']:
-                    message[key] = value
-            
-            # Update the draft
-            updated_draft = {
+            # Create a new draft with the updated content
+            updated_draft_message = {
                 'message': {
-                    'raw': base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8'),
+                    'raw': base64.urlsafe_b64encode(new_message.as_bytes()).decode('utf-8'),
                     'threadId': existing_draft['message'].get('threadId')
                 }
             }
             
-            draft = self.service.users().drafts().update(
+            new_draft = self.service.users().drafts().create(
                 userId='me',
-                id=draft_id,
-                body=updated_draft
+                body=updated_draft_message
             ).execute()
             
-            return draft
+            return new_draft
             
         except HttpError as error:
             print(f'An error occurred updating draft: {error}')
@@ -555,45 +573,67 @@ class GmailService:
         try:
             draft = self.service.users().drafts().get(
                 userId='me',
-                id=draft_id
+                id=draft_id,
+                format='full'
             ).execute()
             
-            if not draft:
+            if not draft or 'message' not in draft:
                 return None
             
-            # Decode the message
-            message_raw = draft['message']['raw']
-            message_decoded = base64.urlsafe_b64decode(message_raw).decode('utf-8')
-            
-            # Parse headers and body
-            lines = message_decoded.split('\n')
+            message = draft['message']
             headers = {}
-            body_lines = []
-            in_body = False
+            body = ''
             
-            for line in lines:
-                if not in_body:
-                    if line.strip() == '':
-                        in_body = True
-                        continue
-                    if ':' in line:
-                        key, value = line.split(':', 1)
-                        headers[key.strip().lower()] = value.strip()
-                else:
-                    body_lines.append(line)
+            # Try to get data from payload first (more reliable)
+            if 'payload' in message:
+                payload = message['payload']
+                
+                # Extract headers
+                if 'headers' in payload:
+                    for header in payload['headers']:
+                        headers[header['name'].lower()] = header['value']
+                
+                # Extract body using existing method
+                body = self.extract_body(payload)
             
-            body = '\n'.join(body_lines).strip()
+            # Fallback: try raw message if payload method fails
+            if not body and 'raw' in message:
+                try:
+                    message_decoded = base64.urlsafe_b64decode(message['raw']).decode('utf-8')
+                    
+                    # Parse headers and body from raw message
+                    lines = message_decoded.split('\n')
+                    body_lines = []
+                    in_body = False
+                    
+                    for line in lines:
+                        if not in_body:
+                            if line.strip() == '':
+                                in_body = True
+                                continue
+                            if ':' in line:
+                                key, value = line.split(':', 1)
+                                headers[key.strip().lower()] = value.strip()
+                        else:
+                            body_lines.append(line)
+                    
+                    body = '\n'.join(body_lines).strip()
+                except Exception as e:
+                    print(f'Error decoding raw message: {e}')
             
             return {
                 'id': draft_id,
                 'to': headers.get('to', ''),
                 'subject': headers.get('subject', ''),
-                'body': body,
-                'message_id': draft['message']['id']
+                'body': body or 'No content available',
+                'message_id': message.get('id', '')
             }
             
         except HttpError as error:
             print(f'An error occurred getting draft: {error}')
+            return None
+        except Exception as error:
+            print(f'Unexpected error getting draft: {error}')
             return None
     
     def send_draft(self, draft_id):
