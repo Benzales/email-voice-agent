@@ -68,6 +68,17 @@ class ToolHandlers:
             return f"Action queued: {description}. Say 'undo' to cancel, or request another action to confirm."
         else:
             return "No email currently selected."
+    
+    def _go_back_to_previous_email(self):
+        """Go back to the previous email by decrementing the index"""
+        if self.gmail_service.current_email_index > 0:
+            # Go back to previous email
+            self.gmail_service.current_email_index -= 2  # -2 because get_next_email will increment by 1
+            email, remaining = self.gmail_service.get_next_email()
+            if email:
+                self.current_email_id = email['id']
+                return f"Went back to previous email from {email['sender']}. Subject: {email['subject']}."
+        return "Cannot go back to previous email."
             
     def handle_get_next_email(self):
         """
@@ -76,8 +87,7 @@ class ToolHandlers:
         Returns:
             Tuple of (result_message, should_exit)
         """
-        # Execute pending action before moving to next email
-        self._execute_pending_action()
+        # Removed _execute_pending_action() call - actions only execute when new actions are requested
         
         email, remaining = self.gmail_service.get_next_email()
         if email:
@@ -150,7 +160,7 @@ class ToolHandlers:
     
     def handle_undo_action(self):
         """
-        Cancel the currently pending action
+        Cancel the currently pending action and go back to the previous email
         
         Returns:
             Result message
@@ -158,8 +168,13 @@ class ToolHandlers:
         if self.pending_action:
             cancelled_action = self.pending_action.description
             self.pending_action = None
-            result = f"Cancelled: {cancelled_action}"
-            print(f"↩️  {result}")
+            
+            # Go back to the previous email
+            back_result = self._go_back_to_previous_email()
+            
+            result = f"Cancelled: {cancelled_action}. {back_result}"
+            print(f"↩️  Cancelled: {cancelled_action}")
+            print(f"⬅️  {back_result}")
             return result
         else:
             result = "No action to undo."
