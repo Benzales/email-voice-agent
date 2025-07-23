@@ -65,8 +65,8 @@ class ToolHandlers:
                 handler_method=handler_method,
                 description=description
             )
-            print(f"📝 Action queued: {description} (will execute when next action is requested)")
-            return f"Action queued: {description}. Say 'undo' to cancel, or request another action to confirm."
+            print(f"📝 Action prepared: {description} (will execute when next action is requested)")
+            return f"I'll {description.lower()} this email. Say 'undo' to cancel, or continue to the next email to confirm."
         else:
             return "No email currently selected."
     
