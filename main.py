@@ -190,7 +190,7 @@ class AudioPlayer:
         while not self.stop_playback:
             try:
                 # Get audio data from queue (timeout to check stop flag)
-                audio_data = self.audio_queue.get(timeout=0.1)
+                audio_data = self.audio_queue.get(timeout=0.005)
                 if audio_data and self.output_stream:
                     self.output_stream.write(audio_data)
             except queue.Empty:
@@ -347,14 +347,14 @@ async def process_realtime_voice():
                     
                     # If we reach here, the async for loop exited (no more messages)
                     # Small delay before retrying to avoid busy loop
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.005)
                     
                 except asyncio.CancelledError:
                     # Task was cancelled, re-raise to exit properly
                     raise
                 except Exception as e:
                     print(f"Error in response processing: {e}")
-                    await asyncio.sleep(0.1)  # Brief pause before retrying
+                    await asyncio.sleep(0.005)  # Brief pause before retrying
                     
         except KeyboardInterrupt:
             print("\n\n👋 Exiting...")
