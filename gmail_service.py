@@ -15,7 +15,7 @@ import base64
 from email.mime.text import MIMEText
 from datetime import datetime
 
-# Gmail API scopes - modify messages and read email
+# Gmail API scopes - modify messages, read email, and manage drafts
 SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
 
 class GmailService:
@@ -418,4 +418,224 @@ class GmailService:
             }
         except HttpError as error:
             print(f'An error occurred: {error}')
-            return {'total': 0, 'unread': 0, 'read': 0} 
+            return {'total': 0, 'unread': 0, 'read': 0}
+    
+    # Draft reply functionality
+    
+    def create_draft_reply(self, original_msg_id, reply_body):
+        """
+        Create a draft reply to an email
+        
+        Args:
+            original_msg_id: The ID of the original message to reply to
+            reply_body: The body text of the reply
+            
+        Returns:
+            Draft object if successful, None otherwise
+        """
+        try:
+            # Get the original message to extract reply details
+            original_message = self.get_message(original_msg_id)
+            if not original_message:
+                return None
+            
+            headers = original_message['payload'].get('headers', [])
+            original_subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
+            original_from = next((h['value'] for h in headers if h['name'] == 'From'), '')
+            original_message_id = next((h['value'] for h in headers if h['name'] == 'Message-ID'), '')
+            
+            # Extract email address from "Name <email@domain.com>" format
+            import re
+            email_match = re.search(r'<([^>]+)>', original_from)
+            reply_to = email_match.group(1) if email_match else original_from
+            
+            # Create reply subject
+            reply_subject = f"Re: {original_subject}" if not original_subject.startswith('Re:') else original_subject
+            
+            # Create the reply message
+            message = MIMEText(reply_body)
+            message['to'] = reply_to
+            message['subject'] = reply_subject
+            message['In-Reply-To'] = original_message_id
+            message['References'] = original_message_id
+            
+            # Create draft
+            draft_message = {
+                'message': {
+                    'raw': base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8'),
+                    'threadId': original_message.get('threadId')
+                }
+            }
+            
+            draft = self.service.users().drafts().create(
+                userId='me',
+                body=draft_message
+            ).execute()
+            
+            return draft
+            
+        except HttpError as error:
+            print(f'An error occurred creating draft: {error}')
+            return None
+    
+    def update_draft(self, draft_id, new_body):
+        """
+        Update an existing draft with new content
+        
+        Args:
+            draft_id: The ID of the draft to update
+            new_body: The new body text for the draft
+            
+        Returns:
+            Updated draft object if successful, None otherwise
+        """
+        try:
+            # Get the existing draft
+            existing_draft = self.service.users().drafts().get(
+                userId='me',
+                id=draft_id
+            ).execute()
+            
+            if not existing_draft:
+                return None
+            
+            # Decode the existing message to get headers
+            existing_raw = existing_draft['message']['raw']
+            existing_decoded = base64.urlsafe_b64decode(existing_raw).decode('utf-8')
+            
+            # Extract headers from existing message
+            lines = existing_decoded.split('\n')
+            headers = {}
+            body_start = 0
+            
+            for i, line in enumerate(lines):
+                if line.strip() == '':
+                    body_start = i + 1
+                    break
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    headers[key.strip()] = value.strip()
+            
+            # Create new message with updated body
+            message = MIMEText(new_body)
+            for key, value in headers.items():
+                if key.lower() not in ['content-type', 'content-transfer-encoding', 'mime-version']:
+                    message[key] = value
+            
+            # Update the draft
+            updated_draft = {
+                'message': {
+                    'raw': base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8'),
+                    'threadId': existing_draft['message'].get('threadId')
+                }
+            }
+            
+            draft = self.service.users().drafts().update(
+                userId='me',
+                id=draft_id,
+                body=updated_draft
+            ).execute()
+            
+            return draft
+            
+        except HttpError as error:
+            print(f'An error occurred updating draft: {error}')
+            return None
+    
+    def get_draft(self, draft_id):
+        """
+        Get a draft by ID
+        
+        Args:
+            draft_id: The ID of the draft to retrieve
+            
+        Returns:
+            Draft details dictionary or None if not found
+        """
+        try:
+            draft = self.service.users().drafts().get(
+                userId='me',
+                id=draft_id
+            ).execute()
+            
+            if not draft:
+                return None
+            
+            # Decode the message
+            message_raw = draft['message']['raw']
+            message_decoded = base64.urlsafe_b64decode(message_raw).decode('utf-8')
+            
+            # Parse headers and body
+            lines = message_decoded.split('\n')
+            headers = {}
+            body_lines = []
+            in_body = False
+            
+            for line in lines:
+                if not in_body:
+                    if line.strip() == '':
+                        in_body = True
+                        continue
+                    if ':' in line:
+                        key, value = line.split(':', 1)
+                        headers[key.strip().lower()] = value.strip()
+                else:
+                    body_lines.append(line)
+            
+            body = '\n'.join(body_lines).strip()
+            
+            return {
+                'id': draft_id,
+                'to': headers.get('to', ''),
+                'subject': headers.get('subject', ''),
+                'body': body,
+                'message_id': draft['message']['id']
+            }
+            
+        except HttpError as error:
+            print(f'An error occurred getting draft: {error}')
+            return None
+    
+    def send_draft(self, draft_id):
+        """
+        Send a draft
+        
+        Args:
+            draft_id: The ID of the draft to send
+            
+        Returns:
+            Sent message object if successful, None otherwise
+        """
+        try:
+            sent_message = self.service.users().drafts().send(
+                userId='me',
+                body={'id': draft_id}
+            ).execute()
+            
+            return sent_message
+            
+        except HttpError as error:
+            print(f'An error occurred sending draft: {error}')
+            return None
+    
+    def delete_draft(self, draft_id):
+        """
+        Delete a draft
+        
+        Args:
+            draft_id: The ID of the draft to delete
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            self.service.users().drafts().delete(
+                userId='me',
+                id=draft_id
+            ).execute()
+            
+            return True
+            
+        except HttpError as error:
+            print(f'An error occurred deleting draft: {error}')
+            return False 

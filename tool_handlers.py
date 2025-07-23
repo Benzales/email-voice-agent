@@ -23,6 +23,7 @@ class ToolHandlers:
         """
         self.gmail_service = gmail_service
         self.current_email_id = None
+        self.current_draft_id = None
         self.emails_processed = 0
         self.should_get_next_email = False
         
@@ -87,6 +88,11 @@ class ToolHandlers:
         Returns:
             Tuple of (result_message, should_exit)
         """
+        # Clear any existing draft when moving to a new email
+        if self.current_draft_id:
+            print(f"📝 Clearing previous draft: {self.current_draft_id}")
+            self.current_draft_id = None
+        
         # Removed _execute_pending_action() call - actions only execute when new actions are requested
         
         email, remaining = self.gmail_service.get_next_email()
@@ -214,6 +220,92 @@ class ToolHandlers:
         result = f"Inbox has {stats['total']} total emails: {stats['unread']} unread, {stats['read']} read."
         print(f"📊 Inbox stats retrieved")
         return result
+    
+    # Draft handling methods
+    
+    def handle_draft_reply(self, reply_body):
+        """
+        Create a draft reply to the current email
+        
+        Args:
+            reply_body: The body text for the reply
+            
+        Returns:
+            Result message
+        """
+        if not self.current_email_id:
+            return "No email currently selected to reply to."
+        
+        draft = self.gmail_service.create_draft_reply(self.current_email_id, reply_body)
+        if draft:
+            self.current_draft_id = draft['id']
+            result = "Draft reply created successfully."
+            print(f"📝 Draft reply created: {self.current_draft_id}")
+            return result
+        else:
+            return "Failed to create draft reply."
+    
+    def handle_edit_draft(self, new_body):
+        """
+        Edit the current draft with new content
+        
+        Args:
+            new_body: The new body text for the draft
+            
+        Returns:
+            Result message
+        """
+        if not self.current_draft_id:
+            return "No draft currently available to edit."
+        
+        updated_draft = self.gmail_service.update_draft(self.current_draft_id, new_body)
+        if updated_draft:
+            result = "Draft updated successfully."
+            print(f"✏️  Draft updated: {self.current_draft_id}")
+            return result
+        else:
+            return "Failed to update draft."
+    
+    def handle_read_draft(self):
+        """
+        Read the current draft content
+        
+        Returns:
+            Result message with draft content
+        """
+        if not self.current_draft_id:
+            return "No draft currently available to read."
+        
+        draft_details = self.gmail_service.get_draft(self.current_draft_id)
+        if draft_details:
+            result = f"Draft to {draft_details['to']}. Subject: {draft_details['subject']}. Body: {draft_details['body']}"
+            print(f"📖 Reading draft: {self.current_draft_id}")
+            return result
+        else:
+            return "Failed to retrieve draft content."
+    
+    def handle_send_draft(self):
+        """
+        Send the current draft
+        
+        Returns:
+            Result message
+        """
+        if not self.current_draft_id:
+            return "No draft currently available to send."
+        
+        sent_message = self.gmail_service.send_draft(self.current_draft_id)
+        if sent_message:
+            result = "Draft sent successfully."
+            print(f"📤 Draft sent: {self.current_draft_id}")
+            # Clear the current draft ID since it's been sent
+            self.current_draft_id = None
+            # Mark as processed and move to next email
+            self.emails_processed += 1
+            self.should_get_next_email = True
+            return result
+        else:
+            return "Failed to send draft."
         
     def process_tool_call(self, function_call):
         """
@@ -255,6 +347,28 @@ class ToolHandlers:
             
         elif function_call.name == "getInboxStats":
             result = self.handle_get_inbox_stats()
+        
+        elif function_call.name == "draftReply":
+            # Extract reply body from function arguments
+            reply_body = getattr(function_call, 'args', {}).get('reply_body', '')
+            if not reply_body:
+                result = "No reply body provided for draft."
+            else:
+                result = self.handle_draft_reply(reply_body)
+        
+        elif function_call.name == "editDraft":
+            # Extract new body from function arguments
+            new_body = getattr(function_call, 'args', {}).get('new_body', '')
+            if not new_body:
+                result = "No new body provided for draft edit."
+            else:
+                result = self.handle_edit_draft(new_body)
+        
+        elif function_call.name == "readDraft":
+            result = self.handle_read_draft()
+        
+        elif function_call.name == "sendDraft":
+            result = self.handle_send_draft()
             
         else:
             result = "Unknown tool called"

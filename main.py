@@ -74,6 +74,46 @@ get_inbox_stats_tool = {
     "description": "Get statistics about the inbox (total emails, unread count, etc.)"
 }
 
+draft_reply_tool = {
+    "name": "draftReply",
+    "description": "Create a draft reply to the current email.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "reply_body": {
+                "type": "string",
+                "description": "The body text of the reply email"
+            }
+        },
+        "required": ["reply_body"]
+    }
+}
+
+edit_draft_tool = {
+    "name": "editDraft",
+    "description": "Edit the current draft with new content.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "new_body": {
+                "type": "string",
+                "description": "The new body text for the draft"
+            }
+        },
+        "required": ["new_body"]
+    }
+}
+
+read_draft_tool = {
+    "name": "readDraft",
+    "description": "Read the content of the current draft."
+}
+
+send_draft_tool = {
+    "name": "sendDraft",
+    "description": "Send the current draft email."
+}
+
 undo_action_tool = {
     "name": "undoAction",
     "description": "Cancel the currently pending action before it's executed."
@@ -87,6 +127,10 @@ tools = [{"function_declarations": [
     delete_tool,
     read_content_tool,
     get_inbox_stats_tool,
+    draft_reply_tool,
+    edit_draft_tool,
+    read_draft_tool,
+    send_draft_tool,
     undo_action_tool
 ]}]
 
@@ -97,7 +141,7 @@ system_instruction = """You are a voice-driven email assistant dedicated to help
 
 You operate in a continuous inbox clearing mode:
 1. Announce each email's sender and subject clearly and concisely
-2. Wait for the user's action command (archive, delete, mark as read/unread, read content, undo)
+2. Wait for the user's action command (archive, delete, mark as read/unread, read content, draft reply, undo)
 3. Queue the action and automatically move to the next email
 4. Continue until all emails are processed
 
@@ -110,7 +154,7 @@ You operate in a continuous inbox clearing mode:
 
 ## Key behaviors:
 - Keep responses extremely concise - just sender and subject
-- ALWAYS automatically call getNextEmail after queueing an action
+- ALWAYS automatically call getNextEmail after queuing an action (except when reading content or working with drafts)
 - When inbox is cleared, announce completion with stats
 - Be efficient and focused on helping users process emails quickly
 - Clearly indicate when actions are queued vs executed
@@ -120,15 +164,27 @@ You operate in a continuous inbox clearing mode:
 - Delete - moves to trash (queued)
 - Mark as read/unread - changes read status (queued)
 - Read content - reads the full email body aloud (immediate)
-- Undo - cancels the currently queued action
+- Undo - cancels the currently queued action (immediate)
+- Draft reply - creates a draft response to the current email (immediate)
+- Edit draft - modify the draft content with new text (immediate)
+- Read draft - read the current draft content aloud (immediate)
+- Send draft - send the draft and move to next email (immediate)
 - If the user says 'skip', treat it as 'mark as unread'
+
+## Draft Management:
+When a user creates a draft reply, you can:
+- Edit draft - modify the draft content with new text
+- Read draft - read the current draft content aloud
+- Send draft - send the draft and move to next email
+- The draft persists until sent or a new email is selected
 
 ## Voice interactions:
 - Speak clearly and at a moderate pace
 - Use natural pauses between emails
 - Confirm when actions are queued (e.g., "Archive queued", "Delete queued")
-- Announce when actions are executed (e.g., "Archived", "Deleted")
-- When reading content, read it clearly and completely
+- Announce when actions are executed (e.g., "Archived", "Deleted", "Draft created")
+- When reading content or drafts, read them clearly and completely
+- For draft replies, ask for the reply content if not provided
 
 Focus on speed and efficiency to help users achieve inbox zero with the safety of undo capability."""
 
