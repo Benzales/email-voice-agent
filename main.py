@@ -16,6 +16,7 @@ import pyaudio
 import threading
 import queue
 import tempfile
+import traceback
 from gmail_service import GmailService
 from tool_handlers import ToolHandlers
 
@@ -300,6 +301,15 @@ class AudioPlayer:
             self.output_stream.close()
         self.audio.terminate()
 
+async def send_error_message(session, error_message):
+    """Send an error message to the session so the AI can respond to the user"""
+    try:
+        await session.send_realtime_input(
+            text=f"An error occurred: {error_message}. Please acknowledge this error and continue helping the user with their inbox."
+        )
+    except Exception as e:
+        print(f"Failed to send error message to session: {e}")
+
 async def process_realtime_voice():
     """
     Process real-time voice input with VAD and stream audio responses.
@@ -322,128 +332,182 @@ async def process_realtime_voice():
     
     # Initialize inbox session automatically
     print("\n📧 Loading inbox emails...")
-    email_count = gmail_service.initialize_inbox_session('in:inbox', 50)
-    print(f"✅ Found {email_count} emails to process")
+    try:
+        email_count = gmail_service.initialize_inbox_session('in:inbox', 50)
+        print(f"✅ Found {email_count} emails to process")
+    except Exception as e:
+        print(f"❌ Failed to load inbox: {e}")
+        return
     
     # Initialize tool handlers
     tool_handlers = ToolHandlers(gmail_service)
     
-    async with client.aio.live.connect(model=model, config=config) as session:
-        
-        print("\n🎤 Voice-driven Inbox Clearing Started!")
-        print("💬 Available commands: archive, delete, skip, mark as read/unread, read content")
-        print("🔊 I'll announce each email - just say what to do with it")
-        print("Press Ctrl+C to exit")
-        print("\n" + "="*50)
-        
-        try:
-            # Start recording
-            recorder.start_recording()
+    try:
+        async with client.aio.live.connect(model=model, config=config) as session:
             
-            # Start audio output stream and playback thread
-            player.start_output_stream()
+            print("\n🎤 Voice-driven Inbox Clearing Started!")
+            print("💬 Available commands: archive, delete, skip, mark as read/unread, read content")
+            print("🔊 I'll announce each email - just say what to do with it")
+            print("Press Ctrl+C to exit")
+            print("\n" + "="*50)
             
-            # Flag to track if we should auto-get next email
-            should_get_next_email = False  # Will be set by tool handlers
-            
-            # Create a separate task for audio streaming
-            async def stream_audio():
-                """Continuously stream audio data to Gemini without interruption"""
-                while True:
-                    audio_data = recorder.get_audio_data()
-                    if audio_data:
-                        await session.send_realtime_input(
-                            audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
-                        )
-                    await asyncio.sleep(0.005)  # Very short sleep to prevent CPU overuse
-            
-            # Start the audio streaming task
-            audio_task = asyncio.create_task(stream_audio())
-            
-            # Send artificial introductory message to kickstart the conversation
-            await session.send_realtime_input(
-                text="Hello! Please introduce yourself as my voice-driven email assistant that will help to clear my inbox and then say let's start with your most recent email."
-            )
-            
-            # Keep the session running continuously
-            while True:
-                try:
-                    # Main response processing loop using Google's recommended pattern
-                    async for response in session.receive():
-                        # Handle interruptions immediately
-                        if response.server_content and response.server_content.interrupted is True:
-                            print("\n🔄 Interrupted - clearing audio queue")
-                            # Clear any queued audio as Google suggests
-                            player.clear_queue()
-                            print("👂 Processing your command...")
-                        
-                        # Handle audio data
-                        elif response.data is not None:
-                            # Queue audio for playback (non-blocking)
-                            player.queue_audio(response.data)
-                        
-                        # Handle tool calls
-                        elif response.tool_call:
-                            function_responses = []
-                            
-                            for fc in response.tool_call.function_calls:
-                                # Process the tool call using our handler
-                                result, should_exit = tool_handlers.process_tool_call(fc)
-                                
-                                # Check if we should get the next email
-                                should_get_next_email = tool_handlers.should_get_next_email
-                                
-                                # Create function response
-                                function_response = types.FunctionResponse(
-                                    id=fc.id,
-                                    name=fc.name,
-                                    response={"result": result}
+            try:
+                # Start recording
+                recorder.start_recording()
+                
+                # Start audio output stream and playback thread
+                player.start_output_stream()
+                
+                # Flag to track if we should auto-get next email
+                should_get_next_email = False  # Will be set by tool handlers
+                
+                # Create a separate task for audio streaming
+                async def stream_audio():
+                    """Continuously stream audio data to Gemini without interruption"""
+                    while True:
+                        try:
+                            audio_data = recorder.get_audio_data()
+                            if audio_data:
+                                await session.send_realtime_input(
+                                    audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
                                 )
-                                function_responses.append(function_response)
-                                
-                                # Exit if all emails processed
-                                if should_exit:
-                                    print("\n👋 All emails processed. Exiting...")
-                                    # Execute final action before exiting
-                                    tool_handlers.execute_final_action()
-                                    raise KeyboardInterrupt()
-
-                            await session.send_tool_response(function_responses=function_responses)
-                            
-                            # If we need to get the next email, do it after sending tool responses
-                            if should_get_next_email:
-                                should_get_next_email = False
-                                await session.send_tool_response(function_responses=[
-                                    types.FunctionResponse(
-                                        id="auto_next",
-                                        name="getNextEmail",
-                                        response={"trigger": "auto"}
-                                    )
-                                ])
-                    
-                    # If we reach here, the async for loop exited (no more messages)
-                    # Small delay before retrying to avoid busy loop
-                    await asyncio.sleep(0.005)
-                    
-                except asyncio.CancelledError:
-                    # Task was cancelled, re-raise to exit properly
-                    raise
+                        except Exception as e:
+                            print(f"⚠️ Audio streaming error: {e}")
+                            await send_error_message(session, f"Audio streaming issue: {str(e)}")
+                        await asyncio.sleep(0.005)  # Very short sleep to prevent CPU overuse
+                
+                # Start the audio streaming task
+                audio_task = asyncio.create_task(stream_audio())
+                
+                # Send artificial introductory message to kickstart the conversation
+                try:
+                    await session.send_realtime_input(
+                        text="Hello! Please introduce yourself as my voice-driven email assistant that will help to clear my inbox and then say let's start with your most recent email."
+                    )
                 except Exception as e:
-                    print(f"Error in response processing: {e}")
-                    await asyncio.sleep(0.005)  # Brief pause before retrying
-                    
-        except KeyboardInterrupt:
-            print("\n\n👋 Exiting...")
-        finally:
-            # Execute any pending action before closing
-            tool_handlers.execute_final_action()
-            
-            # Cancel audio streaming task
-            if 'audio_task' in locals():
-                audio_task.cancel()
-            recorder.stop_recording()
-            recorder.audio.terminate()
-            player.close()
+                    print(f"⚠️ Failed to send initial message: {e}")
+                
+                # Keep the session running continuously
+                while True:
+                    try:
+                        # Main response processing loop using Google's recommended pattern
+                        async for response in session.receive():
+                            try:
+                                # Handle interruptions immediately
+                                if response.server_content and response.server_content.interrupted is True:
+                                    print("\n🔄 Interrupted - clearing audio queue")
+                                    # Clear any queued audio as Google suggests
+                                    player.clear_queue()
+                                    print("👂 Processing your command...")
+                                
+                                # Handle audio data
+                                elif response.data is not None:
+                                    # Queue audio for playback (non-blocking)
+                                    player.queue_audio(response.data)
+                                
+                                # Handle tool calls
+                                elif response.tool_call:
+                                    function_responses = []
+                                    
+                                    for fc in response.tool_call.function_calls:
+                                        try:
+                                            # Process the tool call using our handler
+                                            result, should_exit = tool_handlers.process_tool_call(fc)
+                                            
+                                            # Check if we should get the next email
+                                            should_get_next_email = tool_handlers.should_get_next_email
+                                            
+                                            # Create function response
+                                            function_response = types.FunctionResponse(
+                                                id=fc.id,
+                                                name=fc.name,
+                                                response={"result": result}
+                                            )
+                                            function_responses.append(function_response)
+                                            
+                                            # Exit if all emails processed
+                                            if should_exit:
+                                                print("\n👋 All emails processed. Exiting...")
+                                                # Execute final action before exiting
+                                                tool_handlers.execute_final_action()
+                                                raise KeyboardInterrupt()
+                                        
+                                        except Exception as tool_error:
+                                            print(f"⚠️ Tool call error for {fc.name}: {tool_error}")
+                                            # Create error response for this specific tool call
+                                            error_response = types.FunctionResponse(
+                                                id=fc.id,
+                                                name=fc.name,
+                                                response={"result": f"Error processing {fc.name}: {str(tool_error)}. Please try again or choose a different action."}
+                                            )
+                                            function_responses.append(error_response)
+                                            # Inform user about the error
+                                            await send_error_message(session, f"Tool error with {fc.name}: {str(tool_error)}")
+
+                                    try:
+                                        await session.send_tool_response(function_responses=function_responses)
+                                        
+                                        # If we need to get the next email, do it after sending tool responses
+                                        if should_get_next_email:
+                                            should_get_next_email = False
+                                            await session.send_tool_response(function_responses=[
+                                                types.FunctionResponse(
+                                                    id="auto_next",
+                                                    name="getNextEmail",
+                                                    response={"trigger": "auto"}
+                                                )
+                                            ])
+                                    except Exception as response_error:
+                                        print(f"⚠️ Failed to send tool response: {response_error}")
+                                        await send_error_message(session, f"Communication error: {str(response_error)}")
+                                        
+                            except Exception as response_error:
+                                print(f"⚠️ Error processing response: {response_error}")
+                                print(f"Error details: {traceback.format_exc()}")
+                                await send_error_message(session, f"Response processing error: {str(response_error)}")
+                        
+                        # If we reach here, the async for loop exited (no more messages)
+                        # Small delay before retrying to avoid busy loop
+                        await asyncio.sleep(0.005)
+                        
+                    except asyncio.CancelledError:
+                        # Task was cancelled, re-raise to exit properly
+                        raise
+                    except Exception as e:
+                        print(f"⚠️ Error in main processing loop: {e}")
+                        print(f"Error details: {traceback.format_exc()}")
+                        await send_error_message(session, f"Processing error: {str(e)}")
+                        await asyncio.sleep(0.005)  # Brief pause before retrying
+                        
+            except KeyboardInterrupt:
+                print("\n\n👋 Exiting...")
+            except Exception as session_error:
+                print(f"⚠️ Session error: {session_error}")
+                print(f"Error details: {traceback.format_exc()}")
+            finally:
+                # Execute any pending action before closing
+                try:
+                    tool_handlers.execute_final_action()
+                except Exception as e:
+                    print(f"⚠️ Error executing final action: {e}")
+                
+                # Cancel audio streaming task
+                if 'audio_task' in locals():
+                    try:
+                        audio_task.cancel()
+                    except Exception as e:
+                        print(f"⚠️ Error canceling audio task: {e}")
+                
+                try:
+                    recorder.stop_recording()
+                    recorder.audio.terminate()
+                    player.close()
+                except Exception as e:
+                    print(f"⚠️ Error cleaning up audio resources: {e}")
+    
+    except Exception as connection_error:
+        print(f"❌ Failed to connect to Gemini: {connection_error}")
+        print(f"Error details: {traceback.format_exc()}")
 
 async def main():
     """
@@ -456,7 +520,15 @@ async def main():
     try:
         await process_realtime_voice()
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Unexpected error: {e}")
+        print(f"Error details: {traceback.format_exc()}")
+        print("Please check your configuration and try again.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 Goodbye!")
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
+        print(f"Error details: {traceback.format_exc()}")
