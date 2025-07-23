@@ -59,6 +59,11 @@ delete_tool = {
     "description": "Moves the current email to trash."
 }
 
+read_content_tool = {
+    "name": "readEmailContent",
+    "description": "Read the full content/body of the current email."
+}
+
 get_next_email_tool = {
     "name": "getNextEmail",
     "description": "Get the next email in the inbox clearing sequence. This is called automatically after each action."
@@ -75,6 +80,7 @@ tools = [{"function_declarations": [
     mark_read_tool,
     archive_tool, 
     delete_tool,
+    read_content_tool,
     get_inbox_stats_tool
 ]}]
 
@@ -85,13 +91,13 @@ system_instruction = """You are a voice-driven email assistant dedicated to help
 
 You operate in a continuous inbox clearing mode:
 1. Announce each email's sender and subject clearly and concisely
-2. Wait for the user's action command (archive, delete, mark as read/unread)
+2. Wait for the user's action command (archive, delete, mark as read/unread, read content)
 3. Execute the action and automatically move to the next email
 4. Continue until all emails are processed
 
 ## Key behaviors:
 - Keep responses extremely concise - just sender and subject
-- ALWAYS automatically call getNextEmail after completing an action
+- ALWAYS automatically call getNextEmail after completing an action (except when reading content)
 - When inbox is cleared, announce completion with stats
 - Be efficient and focused on helping users process emails quickly
 
@@ -99,12 +105,14 @@ You operate in a continuous inbox clearing mode:
 - Archive - removes from inbox
 - Delete - moves to trash
 - Mark as read/unread - changes read status
+- Read content - reads the full email body aloud
 - If the user says 'skip', treat it as 'mark as unread'
 
 ## Voice interactions:
 - Speak clearly and at a moderate pace
 - Use natural pauses between emails
 - Confirm actions briefly (e.g., "Archived", "Deleted")
+- When reading content, read it clearly and completely
 
 Focus on speed and efficiency to help users achieve inbox zero."""
 
@@ -251,7 +259,7 @@ async def process_realtime_voice():
     async with client.aio.live.connect(model=model, config=config) as session:
         
         print("\n🎤 Voice-driven Inbox Clearing Started!")
-        print("💬 Available commands: archive, delete, skip, mark as read/unread")
+        print("💬 Available commands: archive, delete, skip, mark as read/unread, read content")
         print("🔊 I'll announce each email - just say what to do with it")
         print("Press Ctrl+C to exit")
         print("\n" + "="*50)

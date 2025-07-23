@@ -114,6 +114,28 @@ class ToolHandlers:
         else:
             return "No email currently selected."
             
+    def handle_read_email_content(self):
+        """
+        Read the body content of the current email
+        
+        Returns:
+            Result message with email body content only
+        """
+        if self.current_email_id:
+            email_details = self.gmail_service.get_message_details(self.current_email_id)
+            if email_details:
+                if email_details['body']:
+                    result = email_details['body']
+                else:
+                    result = "No text content available"
+                
+                print(f"📖 Reading email body")
+                return result
+            else:
+                return "Failed to retrieve email content."
+        else:
+            return "No email currently selected."
+            
     def handle_get_inbox_stats(self):
         """
         Get inbox statistics
@@ -157,6 +179,9 @@ class ToolHandlers:
             
         elif function_call.name == "deleteEmail":
             result = self.handle_delete_email()
+            
+        elif function_call.name == "readEmailContent":
+            result = self.handle_read_email_content()
             
         elif function_call.name == "getInboxStats":
             result = self.handle_get_inbox_stats()
