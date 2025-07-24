@@ -2,545 +2,197 @@
 # Test file: https://storage.googleapis.com/generativeai-downloads/data/16000.wav
 # Install helpers for converting files: pip install librosa soundfile
 
-import asyncio
-import io
-from pathlib import Path
-import wave
 import os
+import sys
+import asyncio
+import logging
+from pathlib import Path
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-import soundfile as sf
-import librosa
-import pyaudio
-import threading
-import queue
-import tempfile
-import traceback
-from gmail_service import GmailService
-from tool_handlers import ToolHandlers
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Get API key from environment
-api_key = os.getenv("GEMINI_API_KEY")
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Import Google AI SDK
+import google.generativeai as genai
+
+# Import our modules
+from tool_handlers import ToolHandlers
+from gmail_mcp_client import get_gmail_client, cleanup_gmail_client
+
+# Configure Gemini API
+api_key = os.getenv('GEMINI_API_KEY')
 if not api_key:
-    raise ValueError("GEMINI_API_KEY not found in environment variables. Please set it in your .env file.")
+    print("Error: GEMINI_API_KEY environment variable not set")
+    print("Please set it with: export GEMINI_API_KEY='your-api-key'")
+    sys.exit(1)
 
-client = genai.Client(api_key=api_key)
+genai.configure(api_key=api_key)
 
-# Initialize Gmail service
-gmail_service = GmailService()
-
-# Half cascade model:
-model = "gemini-live-2.5-flash-preview"
-
-# Native audio output model:
-# model = "gemini-2.5-flash-preview-native-audio-dialog"
-
-# Tool definitions for email actions
-mark_unread_tool = {
-    "name": "markUnread",
-    "description": "Marks the current email as unread."
-}
-
-mark_read_tool = {
-    "name": "markRead",
-    "description": "Marks the current email as read."
-}
-
-archive_tool = {
-    "name": "archive", 
-    "description": "Archives the current email."
-}
-
-delete_tool = {
-    "name": "deleteEmail",
-    "description": "Moves the current email to trash."
-}
-
-read_content_tool = {
-    "name": "readEmailContent",
-    "description": "Read the full content/body of the current email."
-}
-
-get_next_email_tool = {
-    "name": "getNextEmail",
-    "description": "Get the next email in the inbox clearing sequence. This is called automatically after each action."
-}
-
-get_inbox_stats_tool = {
-    "name": "getInboxStats",
-    "description": "Get statistics about the inbox (total emails, unread count, etc.)"
-}
-
-draft_reply_tool = {
-    "name": "draftReply",
-    "description": "Create a draft reply to the current email.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "reply_body": {
-                "type": "string",
-                "description": "The body text of the reply email"
+# Available tools for the AI
+tools = [
+    {
+        "function_declarations": [
+            {
+                "name": "read_latest_email",
+                "description": "Read the latest unread email from inbox",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
+                "name": "mark_email_unread",
+                "description": "Mark the current email as unread",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
+                "name": "archive_email",
+                "description": "Archive the current email",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
+                "name": "delete_email",
+                "description": "Delete the current email (move to trash)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
+                "name": "undo_action",
+                "description": "Undo the last pending action",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
+                "name": "auto_draft_reply",
+                "description": "Generate an automatic draft reply to the current email",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "style": {
+                            "type": "string",
+                            "description": "Style of the response: neutral, friendly, or professional",
+                            "enum": ["neutral", "friendly", "professional"]
+                        }
+                    },
+                    "required": []
+                }
             }
-        },
-        "required": ["reply_body"]
+        ]
     }
-}
+]
 
-edit_draft_tool = {
-    "name": "editDraft",
-    "description": "Edit the current draft with new content.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "new_body": {
-                "type": "string",
-                "description": "The new body text for the draft"
-            }
-        },
-        "required": ["new_body"]
-    }
-}
-
-read_draft_tool = {
-    "name": "readDraft",
-    "description": "Read the content of the current draft."
-}
-
-send_draft_tool = {
-    "name": "sendDraft",
-    "description": "Send the current draft email."
-}
-
-undo_action_tool = {
-    "name": "undoAction",
-    "description": "Cancel the currently pending action before it's executed."
-}
-
-tools = [{"function_declarations": [
-    get_next_email_tool,
-    mark_unread_tool, 
-    mark_read_tool,
-    archive_tool, 
-    delete_tool,
-    read_content_tool,
-    get_inbox_stats_tool,
-    draft_reply_tool,
-    edit_draft_tool,
-    read_draft_tool,
-    send_draft_tool,
-    undo_action_tool
-]}]
-
-# System instruction for email agent context
-system_instruction = """You are a voice-driven email assistant dedicated to helping users efficiently clear their Gmail inbox.
-
-## Your Primary Function: Inbox Clearing
-
-You operate in a continuous inbox clearing mode:
-1. Announce each email's sender and subject clearly and concisely
-2. Wait for the user's action command (archive, delete, mark as read/unread, read content, draft reply, undo)
-3. Prepare the action and automatically move to the next email
-4. Continue until all emails are processed
-
-## Action Undo System:
-- Actions that change email state (archive, delete, mark as read/unread) are prepared first, then executed when moving to the next email
-- Actions are only executed when the next state-changing action is requested or when moving to the next email
-- Users can say "undo" to cancel the currently prepared action
-- Reading content does NOT change state, so it executes immediately
-- The final prepared action is automatically executed when the session ends
-
-## Key behaviors:
-- Keep responses extremely concise - just sender and subject
-- ALWAYS automatically call getNextEmail after preparing an action (except when reading content or working with drafts)
-- When inbox is cleared, announce completion with stats
-- Be efficient and focused on helping users process emails quickly
-- Confirm actions naturally without mentioning backend processes
-
-## Available actions for each email:
-- Archive - removes from inbox (prepared for execution)
-- Delete - moves to trash (prepared for execution)
-- Mark as read/unread - changes read status (prepared for execution)
-- Read content - reads the full email body aloud (immediate)
-- Summarize - first calls readEmailContent, then provides a concise summary of the email (immediate)
-- Undo - cancels the currently prepared action (immediate)
-- Draft reply - creates a draft response to the current email (immediate)
-- Edit draft - modify the draft content with new text (immediate)
-- Read draft - read the current draft content aloud (immediate)
-- Send draft - send the draft and move to next email (immediate)
-- If the user says 'skip', treat it as 'mark as unread'
-
-## Draft Management:
-When a user creates a draft reply, DO NOT automatically advance to the next email. Instead, wait for the user to choose:
-- Edit draft - modify the draft content with new text
-- Read draft - read the current draft content aloud
-- Send draft - send the draft and move to next email
-- Get next email - save the draft for later and move to next email
-- The draft is automatically saved and persists until sent or a new email is selected
-
-## Email Summary Handling:
-When the user requests a summary of an email:
-1. First call the readEmailContent tool to get the full email body
-2. Then provide a concise, clear summary focusing on:
-   - Main purpose/request of the email
-   - Key information or action items
-   - Any deadlines or urgency indicators
-   - Who it's from and basic context
-3. Keep summaries brief but informative (2-3 sentences typically)
-4. After summarizing, wait for the user's next action - do NOT automatically advance
-
-## Voice interactions:
-- Speak clearly and at a moderate pace
-- Use natural pauses between emails
-- Announce when actions are completed (e.g., "Archived", "Deleted", "Draft created")
-- When reading content, drafts, or providing summaries, speak them clearly and completely
-- For draft replies, ask for the reply content if not provided
-
-Focus on speed and efficiency to help users achieve inbox zero with the safety of undo capability."""
-
-config = {
-    "response_modalities": ["AUDIO"],
-    "tools": tools,
-    "system_instruction": [system_instruction]
-}
-
-# Audio recording parameters
-CHUNK = 1024
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 16000
-
-class AudioRecorder:
-    def __init__(self):
-        self.audio = pyaudio.PyAudio()
-        self.frames = []
-        self.is_recording = False
-        self.audio_queue = queue.Queue()
-        
-    def start_recording(self):
-        self.is_recording = True
-        self.frames = []
-        
-        def callback(in_data, frame_count, time_info, status):
-            if self.is_recording:
-                self.audio_queue.put(in_data)
-            return (in_data, pyaudio.paContinue)
-        
-        self.stream = self.audio.open(
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=RATE,
-            input=True,
-            frames_per_buffer=CHUNK,
-            stream_callback=callback
-        )
-        self.stream.start_stream()
-        print("🎤 Recording started... (speak now)")
-        
-    def stop_recording(self):
-        self.is_recording = False
-        if hasattr(self, 'stream'):
-            self.stream.stop_stream()
-            self.stream.close()
-        print("⏹️  Recording stopped")
-        
-    def get_audio_data(self):
-        """Get all recorded audio data as PCM bytes"""
-        audio_data = b''
-        while not self.audio_queue.empty():
-            audio_data += self.audio_queue.get()
-        return audio_data
-
-class AudioPlayer:
-    def __init__(self):
-        self.audio = pyaudio.PyAudio()
-        self.output_stream = None
-        self.audio_queue = queue.Queue()
-        self.playback_thread = None
-        self.stop_playback = False
-        
-    def start_output_stream(self):
-        """Start the output audio stream"""
-        self.output_stream = self.audio.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=24000,
-            output=True,
-            frames_per_buffer=CHUNK
-        )
-        
-        # Start playback thread
-        self.stop_playback = False
-        self.playback_thread = threading.Thread(target=self._playback_worker)
-        self.playback_thread.daemon = True
-        self.playback_thread.start()
+async def process_audio_file(audio_path: str, model, chat_session, tool_handlers: ToolHandlers):
+    """Process a single audio file"""
+    print(f"\n📢 Processing: {audio_path}")
     
-    def _playback_worker(self):
-        """Worker thread that continuously plays audio from the queue"""
-        while not self.stop_playback:
-            try:
-                # Get audio data from queue (timeout to check stop flag)
-                audio_data = self.audio_queue.get(timeout=0.005)
-                if audio_data and self.output_stream:
-                    self.output_stream.write(audio_data)
-            except queue.Empty:
-                continue
-            except Exception as e:
-                print(f"Error in playback worker: {e}")
+    # Upload the audio file
+    audio_file = genai.upload_file(audio_path, mime_type="audio/wav")
     
-    def queue_audio(self, audio_data):
-        """Queue audio data for playback"""
-        self.audio_queue.put(audio_data)
+    # Send audio to Gemini with function calling enabled
+    response = chat_session.send_message([
+        "Listen to this audio command and execute the appropriate email action. Use the available tools to perform the requested action.",
+        audio_file
+    ])
     
-    def clear_queue(self):
-        """Clear all queued audio"""
-        while not self.audio_queue.empty():
-            try:
-                self.audio_queue.get_nowait()
-            except queue.Empty:
-                break
-    
-    def close(self):
-        """Close the audio stream"""
-        self.stop_playback = True
-        if self.playback_thread:
-            self.playback_thread.join(timeout=1)
-        if self.output_stream:
-            self.output_stream.stop_stream()
-            self.output_stream.close()
-        self.audio.terminate()
-
-async def send_error_message(session, error_message):
-    """Send an error message to the session so the AI can respond to the user"""
-    try:
-        await session.send_realtime_input(
-            text=f"An error occurred: {error_message}. Please acknowledge this error and continue helping the user with their inbox."
-        )
-    except Exception as e:
-        print(f"Failed to send error message to session: {e}")
-
-async def process_realtime_voice():
-    """
-    Process real-time voice input with VAD and stream audio responses.
-    """
-    recorder = AudioRecorder()
-    player = AudioPlayer()
-    
-    # Authenticate Gmail service
-    print("🔐 Authenticating with Gmail...")
-    try:
-        gmail_service.authenticate()
-        print("✅ Gmail authentication successful!")
-    except Exception as e:
-        print(f"❌ Gmail authentication failed: {e}")
-        print("\nPlease make sure you have:")
-        print("1. Created OAuth2 credentials in Google Cloud Console")
-        print("2. Downloaded credentials.json to this directory")
-        print("3. Enabled Gmail API in your Google Cloud project")
-        return
-    
-    # Initialize inbox session automatically
-    print("\n📧 Loading inbox emails...")
-    try:
-        email_count = gmail_service.initialize_inbox_session('in:inbox', 50)
-        print(f"✅ Found {email_count} emails to process")
-    except Exception as e:
-        print(f"❌ Failed to load inbox: {e}")
-        return
-    
-    # Initialize tool handlers
-    tool_handlers = ToolHandlers(gmail_service)
-    
-    try:
-        async with client.aio.live.connect(model=model, config=config) as session:
-            
-            print("\n🎤 Voice-driven Inbox Clearing Started!")
-            print("💬 Available commands: archive, delete, skip, mark as read/unread, read content")
-            print("🔊 I'll announce each email - just say what to do with it")
-            print("Press Ctrl+C to exit")
-            print("\n" + "="*50)
-            
-            try:
-                # Start recording
-                recorder.start_recording()
+    # Process any function calls
+    if response.parts:
+        for part in response.parts:
+            if hasattr(part, 'function_call'):
+                function_call = part.function_call
+                result = await tool_handlers.handle_tool_call(
+                    function_call.name,
+                    dict(function_call.args) if hasattr(function_call, 'args') else {}
+                )
                 
-                # Start audio output stream and playback thread
-                player.start_output_stream()
+                # Send the result back to continue the conversation
+                response = chat_session.send_message([{
+                    "function_response": {
+                        "name": function_call.name,
+                        "response": {"result": result}
+                    }
+                }])
                 
-                # Flag to track if we should auto-get next email
-                should_get_next_email = False  # Will be set by tool handlers
-                
-                # Create a separate task for audio streaming
-                async def stream_audio():
-                    """Continuously stream audio data to Gemini without interruption"""
-                    while True:
-                        try:
-                            audio_data = recorder.get_audio_data()
-                            if audio_data:
-                                await session.send_realtime_input(
-                                    audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
-                                )
-                        except Exception as e:
-                            print(f"⚠️ Audio streaming error: {e}")
-                            await send_error_message(session, f"Audio streaming issue: {str(e)}")
-                        await asyncio.sleep(0.005)  # Very short sleep to prevent CPU overuse
-                
-                # Start the audio streaming task
-                audio_task = asyncio.create_task(stream_audio())
-                
-                # Send artificial introductory message to kickstart the conversation
-                try:
-                    await session.send_realtime_input(
-                        text="Hello! Please introduce yourself as my voice-driven email assistant that will help to clear my inbox and then say let's start with your most recent email."
-                    )
-                except Exception as e:
-                    print(f"⚠️ Failed to send initial message: {e}")
-                
-                # Keep the session running continuously
-                while True:
-                    try:
-                        # Main response processing loop using Google's recommended pattern
-                        async for response in session.receive():
-                            try:
-                                # Handle interruptions immediately
-                                if response.server_content and response.server_content.interrupted is True:
-                                    print("\n🔄 Interrupted - clearing audio queue")
-                                    # Clear any queued audio as Google suggests
-                                    player.clear_queue()
-                                    print("👂 Processing your command...")
-                                
-                                # Handle audio data
-                                elif response.data is not None:
-                                    # Queue audio for playback (non-blocking)
-                                    player.queue_audio(response.data)
-                                
-                                # Handle tool calls
-                                elif response.tool_call:
-                                    function_responses = []
-                                    
-                                    for fc in response.tool_call.function_calls:
-                                        try:
-                                            # Process the tool call using our handler
-                                            result, should_exit = tool_handlers.process_tool_call(fc)
-                                            
-                                            # Check if we should get the next email
-                                            should_get_next_email = tool_handlers.should_get_next_email
-                                            
-                                            # Create function response
-                                            function_response = types.FunctionResponse(
-                                                id=fc.id,
-                                                name=fc.name,
-                                                response={"result": result}
-                                            )
-                                            function_responses.append(function_response)
-                                            
-                                            # Exit if all emails processed
-                                            if should_exit:
-                                                print("\n👋 All emails processed. Exiting...")
-                                                # Execute final action before exiting
-                                                tool_handlers.execute_final_action()
-                                                raise KeyboardInterrupt()
-                                        
-                                        except Exception as tool_error:
-                                            print(f"⚠️ Tool call error for {fc.name}: {tool_error}")
-                                            # Create error response for this specific tool call
-                                            error_response = types.FunctionResponse(
-                                                id=fc.id,
-                                                name=fc.name,
-                                                response={"result": f"Error processing {fc.name}: {str(tool_error)}. Please try again or choose a different action."}
-                                            )
-                                            function_responses.append(error_response)
-                                            # Inform user about the error
-                                            await send_error_message(session, f"Tool error with {fc.name}: {str(tool_error)}")
+                # Print the final response
+                if response.text:
+                    print(f"\n🤖 Assistant: {response.text}")
+            elif hasattr(part, 'text') and part.text:
+                print(f"\n🤖 Assistant: {part.text}")
 
-                                    try:
-                                        await session.send_tool_response(function_responses=function_responses)
-                                        
-                                        # If we need to get the next email, do it after sending tool responses
-                                        if should_get_next_email:
-                                            should_get_next_email = False
-                                            await session.send_tool_response(function_responses=[
-                                                types.FunctionResponse(
-                                                    id="auto_next",
-                                                    name="getNextEmail",
-                                                    response={"trigger": "auto"}
-                                                )
-                                            ])
-                                    except Exception as response_error:
-                                        print(f"⚠️ Failed to send tool response: {response_error}")
-                                        await send_error_message(session, f"Communication error: {str(response_error)}")
-                                        
-                            except Exception as response_error:
-                                print(f"⚠️ Error processing response: {response_error}")
-                                print(f"Error details: {traceback.format_exc()}")
-                                await send_error_message(session, f"Response processing error: {str(response_error)}")
-                        
-                        # If we reach here, the async for loop exited (no more messages)
-                        # Small delay before retrying to avoid busy loop
-                        await asyncio.sleep(0.005)
-                        
-                    except asyncio.CancelledError:
-                        # Task was cancelled, re-raise to exit properly
-                        raise
-                    except Exception as e:
-                        print(f"⚠️ Error in main processing loop: {e}")
-                        print(f"Error details: {traceback.format_exc()}")
-                        await send_error_message(session, f"Processing error: {str(e)}")
-                        await asyncio.sleep(0.005)  # Brief pause before retrying
-                        
-            except KeyboardInterrupt:
-                print("\n\n👋 Exiting...")
-            except Exception as session_error:
-                print(f"⚠️ Session error: {session_error}")
-                print(f"Error details: {traceback.format_exc()}")
-            finally:
-                # Execute any pending action before closing
-                try:
-                    tool_handlers.execute_final_action()
-                except Exception as e:
-                    print(f"⚠️ Error executing final action: {e}")
-                
-                # Cancel audio streaming task
-                if 'audio_task' in locals():
-                    try:
-                        audio_task.cancel()
-                    except Exception as e:
-                        print(f"⚠️ Error canceling audio task: {e}")
-                
-                try:
-                    recorder.stop_recording()
-                    recorder.audio.terminate()
-                    player.close()
-                except Exception as e:
-                    print(f"⚠️ Error cleaning up audio resources: {e}")
-    
-    except Exception as connection_error:
-        print(f"❌ Failed to connect to Gemini: {connection_error}")
-        print(f"Error details: {traceback.format_exc()}")
+async def execute_pending_with_delay(tool_handlers: ToolHandlers, delay: int = 5):
+    """Execute pending actions after a delay"""
+    await asyncio.sleep(delay)
+    await tool_handlers.execute_pending_actions()
 
 async def main():
-    """
-    Main function for the voice-driven email agent.
-    """
-    print("🎤 Voice-driven Inbox Clearing Agent")
-    print("📧 Starting automatic inbox processing...")
-    print("🎙️  Initializing voice input...")
-    
+    """Main function to process voice commands"""
     try:
-        await process_realtime_voice()
+        # Initialize Gmail MCP client
+        print("🔌 Connecting to Gmail MCP Server...")
+        gmail_client = await get_gmail_client()
+        
+        # Initialize tool handlers
+        tool_handlers = ToolHandlers()
+        
+        # Create Gemini model with function calling
+        model = genai.GenerativeModel(
+            model_name='gemini-1.5-flash-002',
+            tools=tools
+        )
+        
+        # Start a chat session
+        chat_session = model.start_chat(history=[])
+        
+        # Process each audio file in the input directory
+        input_dir = Path("input")
+        audio_files = sorted(input_dir.glob("*.wav"))
+        
+        if not audio_files:
+            print("❌ No .wav files found in the input directory")
+            return
+        
+        print(f"\n📁 Found {len(audio_files)} audio files to process")
+        
+        for audio_file in audio_files:
+            await process_audio_file(str(audio_file), model, chat_session, tool_handlers)
+            
+            # Start a task to execute pending actions after delay
+            if tool_handlers.pending_actions:
+                print("\n⏳ Pending actions will execute in 5 seconds...")
+                asyncio.create_task(execute_pending_with_delay(tool_handlers))
+        
+        # Wait a bit for any pending tasks
+        await asyncio.sleep(6)
+        
+        print("\n✅ All audio files processed!")
+        
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
-        print(f"Error details: {traceback.format_exc()}")
-        print("Please check your configuration and try again.")
+        logger.error(f"Error in main: {e}")
+        print(f"\n❌ Error: {e}")
+    finally:
+        # Cleanup
+        await cleanup_gmail_client()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n👋 Goodbye!")
-    except Exception as e:
-        print(f"❌ Fatal error: {e}")
-        print(f"Error details: {traceback.format_exc()}")
+    asyncio.run(main())

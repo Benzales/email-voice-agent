@@ -1,16 +1,11 @@
 [project]
 name = "email-voice-agent"
 version = "0.1.0"
-description = "A next-generation, voice-driven email agent for hands-free email processing"
+description = "Voice-driven email agent with Gmail MCP integration"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "google-genai",
-    "librosa",
-    "soundfile",
-    "python-dotenv",
-    "pyaudio",
-    "google-api-python-client",
-    "google-auth-httplib2",
-    "google-auth-oauthlib"
+    "google-generativeai>=0.8.3",
+    "mcp>=1.12.1",
+    "python-dotenv>=1.0.0",
 ]
