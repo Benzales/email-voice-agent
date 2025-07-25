@@ -9,6 +9,7 @@ import json
 import pyaudio
 import queue
 import threading
+import traceback
 import os
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from google import genai
 from google.genai import types
 from mcp_agent.app import MCPApp
 from mcp_agent.agents.agent import Agent
+from custom_tools import EmailNavigationTools
 
 # Load environment variables
 load_dotenv()
@@ -138,25 +140,70 @@ class AudioPlayer:
             self.output_stream.close()
         self.audio.terminate()
 
+class EmailManager:
+    """Manages sequential email reading with deterministic state"""
+    def __init__(self):
+        self.emails = []
+        self.current_index = 0
+        
+    def set_emails(self, emails):
+        """Store emails from search results"""
+        self.emails = emails
+        self.current_index = 0
+        
+    def get_current_email(self):
+        """Get the current email or None if exhausted"""
+        if self.current_index < len(self.emails):
+            return self.emails[self.current_index]
+        return None
+        
+    def next_email(self):
+        """Move to next email"""
+        self.current_index += 1
+        
+    def has_more_emails(self):
+        """Check if there are more emails to read"""
+        return self.current_index < len(self.emails) - 1
+        
+    def is_exhausted(self):
+        """Check if all emails have been read"""
+        return self.current_index >= len(self.emails)
+
 # Removed MCPGmailToolHandler class - using direct MCP tool exposure instead
 
 # System instruction for direct Gmail MCP access
 system_instruction = """You are a voice-driven Gmail assistant with full access to the Gmail API through MCP tools.
 
+## PRIMARY BEHAVIOR - Sequential Email Reading:
+- You will be provided with email information one at a time
+- For each email, announce ONLY: sender and subject
+- After reading each email, ask what the user would like to do
+- Wait for the user's command before any action
+- Possible actions include: reply, archive, delete, mark as read/unread, or skip to next
+- CRITICAL WORKFLOW: After you execute ANY action on an email (using tools like gmail_modify_email, gmail_delete_email, gmail_send_email, etc.), briefly confirm the action with minimal words (e.g., "Archived", "Deleted", "Marked unread"), then immediately call the next_email tool
+- CRITICAL WORKFLOW: If the user says "skip", "next", "continue", etc., immediately call the next_email tool
+- Do NOT ask "what would you like to do next" after completing an email action - just confirm and move to the next email automatically
+- This creates an efficient inbox clearing workflow where each email is processed and the system moves forward automatically
+- DO NOT search for emails yourself - they will be provided to you
+- When performing actions on "this email" or "it", use the email ID that was provided with the email information
+
 ## Key Behaviors:
 - Be concise but helpful in your responses
-- When searching emails, use Gmail's powerful search syntax
 - Confirm actions concisely
-- For batch operations, always confirm the count before proceeding
-- When reading emails, summarize key information unless asked for full content
+- When the user says "next", "skip", or "continue", simply acknowledge and wait for the next email
+- If the user wants to stop reading emails, acknowledge this
 
 ## Voice Interaction:
 - Speak clearly and at a moderate pace
 - Use natural language to describe what you're doing
 - Announce results concisely
-- For long lists, offer to read more details if needed
 
-You can handle any Gmail-related request the user has. Be proactive in suggesting the best tool for their needs."""
+## Email Reading Format:
+When provided with email info, read it as:
+"From [sender] - [subject]
+What would you like to do with this email?"
+
+You can execute any Gmail action the user requests on the current email."""
 
 async def send_error_message(session, error_message):
     """Send an error message to the session so the AI can respond to the user"""
@@ -171,6 +218,7 @@ async def process_realtime_voice():
     """Process real-time voice input with direct MCP Gmail integration"""
     recorder = AudioRecorder()
     player = AudioPlayer()
+    email_manager = EmailManager()
     
     # Initialize MCP app and Gmail agent
     print("🔧 Initializing MCP-Agent framework...")
@@ -191,6 +239,60 @@ async def process_realtime_voice():
     # Get available tools from MCP and convert to Gemini format
     mcp_tools_result = await gmail_agent.list_tools()
     print(f"✅ Connected to Gmail MCP server with {len(mcp_tools_result.tools)} tools")
+    
+    # Fetch emails from inbox before starting voice session
+    print("\n📧 Fetching emails from inbox...")
+    try:
+        # Search for inbox emails using the correct Gmail MCP tool
+        search_result = await gmail_agent.call_tool(
+            "gmail_search_emails",
+            arguments={"query": "in:inbox", "maxResults": 50}
+        )
+        
+        # Extract emails from result
+        emails = []
+        if hasattr(search_result, 'content') and search_result.content:
+            for content_item in search_result.content:
+                if hasattr(content_item, 'text'):
+                    text_content = content_item.text
+                    
+                    # Parse the Gmail MCP response format
+                    # Format is: ID: [id]\nSubject: [subject]\nFrom: [from]\nDate: [date]\n\n
+                    lines = text_content.split('\n')
+                    current_email = {}
+                    
+                    for line in lines:
+                        line = line.strip()
+                        
+                        if line.startswith('ID: '):
+                            # Save previous email if it exists
+                            if current_email and 'id' in current_email:
+                                emails.append(current_email)
+                            # Start new email
+                            current_email = {'id': line.replace('ID: ', '').strip()}
+                            
+                        elif line.startswith('Subject: ') and 'id' in current_email:
+                            current_email['subject'] = line.replace('Subject: ', '').strip()
+                            
+                        elif line.startswith('From: ') and 'id' in current_email:
+                            current_email['from'] = line.replace('From: ', '').strip()
+                            
+                        elif line.startswith('Date: ') and 'id' in current_email:
+                            current_email['date'] = line.replace('Date: ', '').strip()
+                    
+                    # Don't forget the last email
+                    if current_email and 'id' in current_email:
+                        emails.append(current_email)
+        
+        if emails:
+            email_manager.set_emails(emails)
+            print(f"✅ Found emails in inbox")
+        else:
+            print("⚠️ No emails found in inbox")
+            
+    except Exception as e:
+        print(f"⚠️ Error fetching emails: {e}")
+        print("Continuing without pre-loaded emails...")
     
     # Dynamically convert MCP tools to Gemini format
     gemini_tools = []
@@ -217,6 +319,14 @@ async def process_realtime_voice():
         )
         gemini_tools.append(gemini_tool)
     
+    # Create custom navigation tools
+    nav_tools = EmailNavigationTools(email_manager)
+    
+    # Add custom next_email tool
+    next_email_tool = nav_tools.get_next_email_tool()
+    gemini_tools.append(next_email_tool)
+    print(f"  - next_email: Move to the next email in the inbox sequence")
+    
     # Configuration for Gemini with all discovered MCP tools
     config = {
         "response_modalities": ["AUDIO"],
@@ -228,9 +338,12 @@ async def process_realtime_voice():
         async with client.aio.live.connect(model=model, config=config) as session:
             
             print("\n🎤 Voice-driven Gmail Assistant Started!")
-            print("💬 You now have full Gmail API access via voice commands")
-            print("🔊 Examples: 'Search for unread emails', 'Archive all promotional emails', 'Create a draft reply'")
-            print("📧 All Gmail operations are available - just ask!")
+            print("📧 Pre-loading your inbox emails...")
+            print("💬 The assistant will read each email sequentially")
+            print("🎯 After each email, you can:")
+            print("   - Take action: Reply, Archive, Delete, Mark as read/unread")
+            print("   - Say 'Next' or 'Skip' to move to the next email")
+            print("   - Say 'Stop' to exit email reading mode")
             print("Press Ctrl+C to exit")
             print("\n" + "="*50)
             
@@ -257,10 +370,25 @@ async def process_realtime_voice():
                 # Start audio streaming
                 audio_task = asyncio.create_task(stream_audio())
                 
-                # Send artificial introductory message
-                await session.send_realtime_input(
-                    text="Hello! Please introduce yourself as my voice-driven Gmail assistant with full access to the Gmail API. Explain that I can search emails, read content, modify messages, create drafts, and more. Ask me what I'd like to do with my emails today."
-                )
+                # Send initial instruction to agent
+                if len(email_manager.emails) > 0:
+                    current_email = email_manager.get_current_email()
+                    
+                    # Extract email details
+                    email_id = current_email.get('id', '')
+                    sender = current_email.get('from', 'Unknown')
+                    subject = current_email.get('subject', 'No subject')
+                    
+                    await session.send_realtime_input(
+                        text=f"Please introduce yourself as my voice-driven Gmail assistant, then read me the first email. The first email is: From {sender} - {subject} [Current email ID: {email_id}]. After reading it, ask what I'd like to do with this email."
+                    )
+                else:
+                    await session.send_realtime_input(
+                        text="Please introduce yourself as my voice-driven Gmail assistant and let me know that you couldn't find any emails in my inbox. Ask how you can help me today."
+                    )
+                
+                # Store last processed email ID for tracking
+                last_email_id = None
                 
                 # Main response processing loop
                 while True:
@@ -283,32 +411,46 @@ async def process_realtime_voice():
                                     
                                     for fc in response.tool_call.function_calls:
                                         try:
-                                            # Execute MCP tool directly
-                                            print(f"🎯 Executing {fc.name} with args: {dict(fc.args)}")
+                                            # Handle custom next_email tool
+                                            if fc.name == "next_email":
+                                                print(f"🎯 Executing custom next_email tool")
+                                                
+                                                result = await nav_tools.execute_next_email()
+                                                
+                                                function_response = types.FunctionResponse(
+                                                    id=fc.id,
+                                                    name=fc.name,
+                                                    response=result
+                                                )
+                                                function_responses.append(function_response)
                                             
-                                            result = await gmail_agent.call_tool(
-                                                fc.name,
-                                                arguments=dict(fc.args)
-                                            )
-                                            
-                                            # Extract text content from MCP result
-                                            response_content = {}
-                                            if hasattr(result, 'content') and result.content:
-                                                text_parts = []
-                                                for content_item in result.content:
-                                                    if hasattr(content_item, 'text'):
-                                                        text_parts.append(content_item.text)
-                                                response_content["result"] = "\n".join(text_parts)
+                                            # Handle MCP tools
                                             else:
-                                                response_content["result"] = "Tool executed successfully"
-                                            
-                                            # Create function response
-                                            function_response = types.FunctionResponse(
-                                                id=fc.id,
-                                                name=fc.name,
-                                                response=response_content
-                                            )
-                                            function_responses.append(function_response)
+                                                print(f"🎯 Executing {fc.name} with args: {dict(fc.args)}")
+                                                
+                                                result = await gmail_agent.call_tool(
+                                                    fc.name,
+                                                    arguments=dict(fc.args)
+                                                )
+                                                
+                                                # Extract text content from MCP result
+                                                response_content = {}
+                                                if hasattr(result, 'content') and result.content:
+                                                    text_parts = []
+                                                    for content_item in result.content:
+                                                        if hasattr(content_item, 'text'):
+                                                            text_parts.append(content_item.text)
+                                                    response_content["result"] = "\n".join(text_parts)
+                                                else:
+                                                    response_content["result"] = "Tool executed successfully"
+                                                
+                                                # Create function response
+                                                function_response = types.FunctionResponse(
+                                                    id=fc.id,
+                                                    name=fc.name,
+                                                    response=response_content
+                                                )
+                                                function_responses.append(function_response)
                                         
                                         except Exception as tool_error:
                                             print(f"⚠️ Tool call error for {fc.name}: {tool_error}")
