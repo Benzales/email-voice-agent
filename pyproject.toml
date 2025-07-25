@@ -5,12 +5,21 @@ description = "A next-generation, voice-driven email agent for hands-free email 
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    # Core dependencies for both versions
     "google-genai",
-    "librosa",
-    "soundfile",
     "python-dotenv",
     "pyaudio",
+    
+    # Gmail API dependencies (for original version)
     "google-api-python-client",
     "google-auth-httplib2",
-    "google-auth-oauthlib"
+    "google-auth-oauthlib",
+    
+    # MCP dependencies (for integrated version)
+    "mcp-agent>=0.1.0",
+    "mcp>=1.0.0",
+    
+    # Audio processing (optional, for file conversion)
+    "librosa",
+    "soundfile",
 ]

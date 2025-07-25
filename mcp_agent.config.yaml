@@ -1,0 +1,15 @@
+execution_engine: asyncio
+
+logger:
+  transports: [console]
+  level: info
+  
+mcp:
+  servers:
+    gmail:
+      command: "npx"
+      args: ["-y", "@gongrzhe/server-gmail-autoauth-mcp"]
+      description: "Gmail MCP server with auto authentication support"
+      # Alternatively, you can use a local Gmail MCP server:
+      # command: "python"
+      # args: ["path/to/your/gmail_mcp_server.py"] 

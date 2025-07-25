@@ -65,3 +65,5 @@ logs/
 
 # Python version file
 .python-version 
+
+mcp_agent.secrets.yaml
