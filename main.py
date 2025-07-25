@@ -174,24 +174,23 @@ class EmailManager:
 # System instruction for direct Gmail MCP access
 system_instruction = """You are a voice-driven Gmail assistant with full access to the Gmail API through MCP tools.
 
-## PRIMARY BEHAVIOR - Sequential Email Reading:
-- You will be provided with email information one at a time
-- For each email, announce ONLY: sender and subject
-- After reading each email, ask what the user would like to do
+## PRIMARY BEHAVIOR - Single Email Focus:
+- You will be provided with information for ONE email at a time
+- For the email, announce ONLY: sender and subject
+- After reading the email, ask what the user would like to do
 - Wait for the user's command before any action
 - Possible actions include: reply, archive, delete, mark as read/unread, or skip to next
-- CRITICAL WORKFLOW: After you execute ANY action on an email (using tools like gmail_modify_email, gmail_delete_email, gmail_send_email, etc.), briefly confirm the action with minimal words (e.g., "Archived", "Deleted", "Marked unread"), then immediately call the next_email tool
-- CRITICAL WORKFLOW: If the user says "skip", "next", "continue", etc., immediately call the next_email tool
-- Do NOT ask "what would you like to do next" after completing an email action - just confirm and move to the next email automatically
-- This creates an efficient inbox clearing workflow where each email is processed and the system moves forward automatically
-- DO NOT search for emails yourself - they will be provided to you
+- CRITICAL WORKFLOW: After you execute ANY action on an email (using tools like gmail_modify_email, gmail_delete_email, gmail_send_email, etc.), briefly confirm the action with minimal words (e.g., "Archived", "Deleted", "Marked unread"), then immediately call the end_session tool
+- CRITICAL WORKFLOW: If the user says "skip", "next", "continue", etc., immediately call the end_session tool
+- Do NOT ask "what would you like to do next" after completing an email action - just confirm and call end_session
+- This creates an efficient workflow where each email is processed and the system moves forward automatically
 - When performing actions on "this email" or "it", use the email ID that was provided with the email information
 
 ## Key Behaviors:
 - Be concise but helpful in your responses
 - Confirm actions concisely
-- When the user says "next", "skip", or "continue", simply acknowledge and wait for the next email
-- If the user wants to stop reading emails, acknowledge this
+- When the user says "next", "skip", or "continue", simply acknowledge and call end_session
+- Focus only on the current email - there is no history of previous emails in this session
 
 ## Voice Interaction:
 - Speak clearly and at a moderate pace
@@ -214,138 +213,39 @@ async def send_error_message(session, error_message):
     except Exception as e:
         print(f"Failed to send error message to session: {e}")
 
-async def process_realtime_voice():
-    """Process real-time voice input with direct MCP Gmail integration"""
+async def process_single_email_session(email_manager, nav_tools, gmail_agent, gemini_tools):
+    """Process a single email in its own session"""
+    current_email = email_manager.get_current_email()
+    if not current_email:
+        return False  # No more emails
+    
+    # Reset navigation tools state for new session
+    nav_tools.reset_session_state()
+    
+    # Extract email details
+    email_id = current_email.get('id', '')
+    sender = current_email.get('from', 'Unknown')
+    subject = current_email.get('subject', 'No subject')
+    
     recorder = AudioRecorder()
     player = AudioPlayer()
-    email_manager = EmailManager()
-    
-    # Initialize MCP app and Gmail agent
-    print("🔧 Initializing MCP-Agent framework...")
-    mcp_app = MCPApp(name="voice_gmail_agent")
-    await mcp_app.initialize()
-    
-    # Create Gmail agent
-    gmail_agent = Agent(
-        name="gmail",
-        instruction="Execute Gmail operations efficiently",
-        server_names=["gmail"],
-        connection_persistence=True
-    )
-    
-    # Initialize the agent
-    await gmail_agent.initialize()
-    
-    # Get available tools from MCP and convert to Gemini format
-    mcp_tools_result = await gmail_agent.list_tools()
-    print(f"✅ Connected to Gmail MCP server with {len(mcp_tools_result.tools)} tools")
-    
-    # Fetch emails from inbox before starting voice session
-    print("\n📧 Fetching emails from inbox...")
-    try:
-        # Search for inbox emails using the correct Gmail MCP tool
-        search_result = await gmail_agent.call_tool(
-            "gmail_search_emails",
-            arguments={"query": "in:inbox", "maxResults": 50}
-        )
-        
-        # Extract emails from result
-        emails = []
-        if hasattr(search_result, 'content') and search_result.content:
-            for content_item in search_result.content:
-                if hasattr(content_item, 'text'):
-                    text_content = content_item.text
-                    
-                    # Parse the Gmail MCP response format
-                    # Format is: ID: [id]\nSubject: [subject]\nFrom: [from]\nDate: [date]\n\n
-                    lines = text_content.split('\n')
-                    current_email = {}
-                    
-                    for line in lines:
-                        line = line.strip()
-                        
-                        if line.startswith('ID: '):
-                            # Save previous email if it exists
-                            if current_email and 'id' in current_email:
-                                emails.append(current_email)
-                            # Start new email
-                            current_email = {'id': line.replace('ID: ', '').strip()}
-                            
-                        elif line.startswith('Subject: ') and 'id' in current_email:
-                            current_email['subject'] = line.replace('Subject: ', '').strip()
-                            
-                        elif line.startswith('From: ') and 'id' in current_email:
-                            current_email['from'] = line.replace('From: ', '').strip()
-                            
-                        elif line.startswith('Date: ') and 'id' in current_email:
-                            current_email['date'] = line.replace('Date: ', '').strip()
-                    
-                    # Don't forget the last email
-                    if current_email and 'id' in current_email:
-                        emails.append(current_email)
-        
-        if emails:
-            email_manager.set_emails(emails)
-            print(f"✅ Found emails in inbox")
-        else:
-            print("⚠️ No emails found in inbox")
-            
-    except Exception as e:
-        print(f"⚠️ Error fetching emails: {e}")
-        print("Continuing without pre-loaded emails...")
-    
-    # Dynamically convert MCP tools to Gemini format
-    gemini_tools = []
-    print("\n📋 Available Gmail operations:")
-    for tool in mcp_tools_result.tools:
-        print(f"  - {tool.name}: {tool.description}")
-        
-        # Extract parameters, filtering out schema metadata
-        parameters = {}
-        if hasattr(tool, 'inputSchema') and tool.inputSchema:
-            parameters = {
-                k: v
-                for k, v in tool.inputSchema.items()
-                if k not in ["additionalProperties", "$schema"]
-            }
-        
-        # Create Gemini-compatible tool definition
-        gemini_tool = types.Tool(
-            function_declarations=[{
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": parameters,
-            }]
-        )
-        gemini_tools.append(gemini_tool)
-    
-    # Create custom navigation tools
-    nav_tools = EmailNavigationTools(email_manager)
-    
-    # Add custom next_email tool
-    next_email_tool = nav_tools.get_next_email_tool()
-    gemini_tools.append(next_email_tool)
-    print(f"  - next_email: Move to the next email in the inbox sequence")
     
     # Configuration for Gemini with all discovered MCP tools
     config = {
         "response_modalities": ["AUDIO"],
-        "tools": gemini_tools,  # All MCP tools directly exposed
+        "tools": gemini_tools,
         "system_instruction": [system_instruction]
     }
+    
+    session_completed = False
     
     try:
         async with client.aio.live.connect(model=model, config=config) as session:
             
-            print("\n🎤 Voice-driven Gmail Assistant Started!")
-            print("📧 Pre-loading your inbox emails...")
-            print("💬 The assistant will read each email sequentially")
-            print("🎯 After each email, you can:")
-            print("   - Take action: Reply, Archive, Delete, Mark as read/unread")
-            print("   - Say 'Next' or 'Skip' to move to the next email")
-            print("   - Say 'Stop' to exit email reading mode")
-            print("Press Ctrl+C to exit")
-            print("\n" + "="*50)
+            print(f"\n📧 Processing Email {email_manager.current_index + 1}/{len(email_manager.emails)}")
+            print(f"   From: {sender}")
+            print(f"   Subject: {subject}")
+            print("   🎤 Listening...")
             
             try:
                 # Start recording
@@ -355,7 +255,7 @@ async def process_realtime_voice():
                 # Audio streaming task
                 async def stream_audio():
                     """Continuously stream audio data to Gemini without interruption"""
-                    while True:
+                    while not nav_tools.should_end_session():
                         try:
                             audio_data = recorder.get_audio_data()
                             if audio_data:
@@ -370,28 +270,13 @@ async def process_realtime_voice():
                 # Start audio streaming
                 audio_task = asyncio.create_task(stream_audio())
                 
-                # Send initial instruction to agent
-                if len(email_manager.emails) > 0:
-                    current_email = email_manager.get_current_email()
-                    
-                    # Extract email details
-                    email_id = current_email.get('id', '')
-                    sender = current_email.get('from', 'Unknown')
-                    subject = current_email.get('subject', 'No subject')
-                    
-                    await session.send_realtime_input(
-                        text=f"Please introduce yourself as my voice-driven Gmail assistant, then read me the first email. The first email is: From {sender} - {subject} [Current email ID: {email_id}]. After reading it, ask what I'd like to do with this email."
-                    )
-                else:
-                    await session.send_realtime_input(
-                        text="Please introduce yourself as my voice-driven Gmail assistant and let me know that you couldn't find any emails in my inbox. Ask how you can help me today."
-                    )
-                
-                # Store last processed email ID for tracking
-                last_email_id = None
+                # Send initial email information to agent
+                await session.send_realtime_input(
+                    text=f"Please read me this email and ask what I'd like to do with it. The email is: From {sender} - {subject} [Current email ID: {email_id}]."
+                )
                 
                 # Main response processing loop
-                while True:
+                while not nav_tools.should_end_session():
                     try:
                         async for response in session.receive():
                             try:
@@ -411,11 +296,11 @@ async def process_realtime_voice():
                                     
                                     for fc in response.tool_call.function_calls:
                                         try:
-                                            # Handle custom next_email tool
-                                            if fc.name == "next_email":
-                                                print(f"🎯 Executing custom next_email tool")
+                                            # Handle custom end_session tool
+                                            if fc.name == "end_session":
+                                                print(f"🎯 Executing end_session tool")
                                                 
-                                                result = await nav_tools.execute_next_email()
+                                                result = await nav_tools.execute_end_session()
                                                 
                                                 function_response = types.FunctionResponse(
                                                     id=fc.id,
@@ -463,26 +348,37 @@ async def process_realtime_voice():
                                     
                                     # Send tool responses
                                     await session.send_tool_response(function_responses=function_responses)
+                                    
+                                    # Check if session should end after tool execution
+                                    if nav_tools.should_end_session():
+                                        break
                                         
                             except Exception as response_error:
                                 print(f"⚠️ Error processing response: {response_error}")
                                 await send_error_message(session, f"Response processing error: {str(response_error)}")
+                            
+                            # Break if session should end
+                            if nav_tools.should_end_session():
+                                break
                         
                         await asyncio.sleep(0.005)
                         
                     except asyncio.CancelledError:
                         raise
                     except Exception as e:
-                        print(f"⚠️ Error in main processing loop: {e}")
+                        print(f"⚠️ Error in processing loop: {e}")
                         await send_error_message(session, f"Processing error: {str(e)}")
                         await asyncio.sleep(0.005)
+                
+                session_completed = True
+                print("✅ Session completed")
                         
             except KeyboardInterrupt:
-                print("\n\n👋 Exiting...")
+                print("\n\n👋 User interrupted...")
+                return False  # Stop processing emails
             except Exception as session_error:
                 print(f"⚠️ Session error: {session_error}")
             finally:
-                
                 # Cancel audio streaming task
                 if 'audio_task' in locals():
                     try:
@@ -496,13 +392,164 @@ async def process_realtime_voice():
                     player.close()
                 except Exception as e:
                     print(f"⚠️ Error cleaning up audio resources: {e}")
-                
-                # Cleanup MCP connection
-                if gmail_agent:
-                    await gmail_agent.__aexit__(None, None, None)
     
     except Exception as connection_error:
         print(f"❌ Failed to connect to Gemini: {connection_error}")
+        return False
+    
+    return session_completed
+
+async def process_realtime_voice():
+    """Process real-time voice input with direct MCP Gmail integration - one session per email"""
+    email_manager = EmailManager()
+    
+    # Initialize MCP app and Gmail agent
+    print("🔧 Initializing MCP-Agent framework...")
+    mcp_app = MCPApp(name="voice_gmail_agent")
+    await mcp_app.initialize()
+    
+    # Create Gmail agent
+    gmail_agent = Agent(
+        name="gmail",
+        instruction="Execute Gmail operations efficiently",
+        server_names=["gmail"],
+        connection_persistence=True
+    )
+    
+    # Initialize the agent
+    await gmail_agent.initialize()
+    
+    # Get available tools from MCP and convert to Gemini format
+    mcp_tools_result = await gmail_agent.list_tools()
+    print(f"✅ Connected to Gmail MCP server with {len(mcp_tools_result.tools)} tools")
+    
+    # Fetch emails from inbox before starting voice session
+    print("\n📧 Fetching emails from inbox...")
+    try:
+        # Search for inbox emails using the correct Gmail MCP tool
+        search_result = await gmail_agent.call_tool(
+            "gmail_search_emails",
+            arguments={"query": "in:inbox", "maxResults": 50}
+        )
+        
+        # Extract emails from result
+        emails = []
+        if hasattr(search_result, 'content') and search_result.content:
+            for content_item in search_result.content:
+                if hasattr(content_item, 'text'):
+                    text_content = content_item.text
+                    
+                    # Parse the Gmail MCP response format
+                    lines = text_content.split('\n')
+                    current_email = {}
+                    
+                    for line in lines:
+                        line = line.strip()
+                        
+                        if line.startswith('ID: '):
+                            # Save previous email if it exists
+                            if current_email and 'id' in current_email:
+                                emails.append(current_email)
+                            # Start new email
+                            current_email = {'id': line.replace('ID: ', '').strip()}
+                            
+                        elif line.startswith('Subject: ') and 'id' in current_email:
+                            current_email['subject'] = line.replace('Subject: ', '').strip()
+                            
+                        elif line.startswith('From: ') and 'id' in current_email:
+                            current_email['from'] = line.replace('From: ', '').strip()
+                            
+                        elif line.startswith('Date: ') and 'id' in current_email:
+                            current_email['date'] = line.replace('Date: ', '').strip()
+                    
+                    # Don't forget the last email
+                    if current_email and 'id' in current_email:
+                        emails.append(current_email)
+        
+        if emails:
+            email_manager.set_emails(emails)
+            print(f"✅ Found {len(emails)} emails in inbox")
+        else:
+            print("⚠️ No emails found in inbox")
+            return
+            
+    except Exception as e:
+        print(f"⚠️ Error fetching emails: {e}")
+        print("Exiting...")
+        return
+    
+    # Dynamically convert MCP tools to Gemini format
+    gemini_tools = []
+    print("\n📋 Available Gmail operations:")
+    for tool in mcp_tools_result.tools:
+        print(f"  - {tool.name}: {tool.description}")
+        
+        # Extract parameters, filtering out schema metadata
+        parameters = {}
+        if hasattr(tool, 'inputSchema') and tool.inputSchema:
+            parameters = {
+                k: v
+                for k, v in tool.inputSchema.items()
+                if k not in ["additionalProperties", "$schema"]
+            }
+        
+        # Create Gemini-compatible tool definition
+        gemini_tool = types.Tool(
+            function_declarations=[{
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": parameters,
+            }]
+        )
+        gemini_tools.append(gemini_tool)
+    
+    # Create custom navigation tools
+    nav_tools = EmailNavigationTools(email_manager)
+    
+    # Add custom end_session tool
+    end_session_tool = nav_tools.get_end_session_tool()
+    gemini_tools.append(end_session_tool)
+    print(f"  - end_session: End the current email session and move to next email")
+    
+    print("\n🎤 Voice-driven Gmail Assistant Started!")
+    print("📧 Processing emails one at a time with fresh sessions")
+    print("💬 For each email:")
+    print("   - The assistant will read the sender and subject")
+    print("   - You can take action: Reply, Archive, Delete, Mark as read/unread")
+    print("   - Say 'Next' or 'Skip' to move to the next email")
+    print("   - Each email gets a fresh conversation context")
+    print("Press Ctrl+C to exit")
+    print("\n" + "="*50)
+    
+    try:
+        # Process emails one by one
+        while not email_manager.is_exhausted():
+            session_success = await process_single_email_session(
+                email_manager, nav_tools, gmail_agent, gemini_tools
+            )
+            
+            if not session_success:
+                print("❌ Session failed or was interrupted")
+                break
+            
+            # Move to next email for next session
+            email_manager.next_email()
+            
+            if not email_manager.is_exhausted():
+                print("\n⏭️  Moving to next email...")
+                await asyncio.sleep(1)  # Brief pause between sessions
+            else:
+                print("\n🎉 All emails processed!")
+                break
+    
+    except KeyboardInterrupt:
+        print("\n\n👋 Exiting...")
+    except Exception as e:
+        print(f"❌ Unexpected error in main loop: {e}")
+    finally:
+        # Cleanup MCP connection
+        if gmail_agent:
+            await gmail_agent.__aexit__(None, None, None)
 
 async def main():
     """Main function for the voice-driven email agent with direct MCP access"""
