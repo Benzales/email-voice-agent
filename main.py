@@ -140,7 +140,7 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
             
             try:
                 # Start recording
-                recorder.start_recording()
+                recorder.start_recording()  # TODO: we don't want to start recording during testing since we'll be using the test audio files
                 player.start_output_stream()
                 
                 # Audio streaming task
@@ -163,7 +163,7 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                 
                 # Send initial email information to agent
                 await session.send_realtime_input(
-                    text=f"Please read me this email and ask what I'd like to do with it. The email is: From {sender} - {subject} [Current email ID: {email_id}]."
+                    text=f"Please read me this email and ask what I'd like to do with it. The email is: From {sender} - {subject} [Current email ID: {email_id}]."  #TODO: can remove email id and ensure every tool call has access to the email id. 
                 )
                 
                 # Main response processing loop
