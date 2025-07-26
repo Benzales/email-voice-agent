@@ -19,6 +19,7 @@ from google.genai import types
 from mcp_agent.app import MCPApp
 from mcp_agent.agents.agent import Agent
 from custom_tools import EmailNavigationTools
+from gmail_helpers import parse_gmail_search_results
 
 # Load environment variables
 load_dotenv()
@@ -432,39 +433,8 @@ async def process_realtime_voice():
             arguments={"query": "in:inbox", "maxResults": 50}
         )
         
-        # Extract emails from result
-        emails = []
-        if hasattr(search_result, 'content') and search_result.content:
-            for content_item in search_result.content:
-                if hasattr(content_item, 'text'):
-                    text_content = content_item.text
-                    
-                    # Parse the Gmail MCP response format
-                    lines = text_content.split('\n')
-                    current_email = {}
-                    
-                    for line in lines:
-                        line = line.strip()
-                        
-                        if line.startswith('ID: '):
-                            # Save previous email if it exists
-                            if current_email and 'id' in current_email:
-                                emails.append(current_email)
-                            # Start new email
-                            current_email = {'id': line.replace('ID: ', '').strip()}
-                            
-                        elif line.startswith('Subject: ') and 'id' in current_email:
-                            current_email['subject'] = line.replace('Subject: ', '').strip()
-                            
-                        elif line.startswith('From: ') and 'id' in current_email:
-                            current_email['from'] = line.replace('From: ', '').strip()
-                            
-                        elif line.startswith('Date: ') and 'id' in current_email:
-                            current_email['date'] = line.replace('Date: ', '').strip()
-                    
-                    # Don't forget the last email
-                    if current_email and 'id' in current_email:
-                        emails.append(current_email)
+        # Extract emails from result using helper function
+        emails = parse_gmail_search_results(search_result)
         
         if emails:
             email_manager.set_emails(emails)
