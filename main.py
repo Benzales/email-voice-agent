@@ -136,10 +136,7 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
     try:
         async with client.aio.live.connect(model=model, config=config) as session:
             
-            print(f"\n📧 Processing Email {email_manager.current_index + 1}/{len(email_manager.emails)}")
-            print(f"   From: {sender}")
-            print(f"   Subject: {subject}")
-            print("   🎤 Listening...")
+            print(f"📧 Processing Email {email_manager.current_index + 1}/{len(email_manager.emails)}")
             
             try:
                 # Start recording
@@ -176,9 +173,8 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                             try:
                                 # Handle interruptions
                                 if response.server_content and response.server_content.interrupted is True:
-                                    print("\n🔄 Interrupted - clearing audio queue")
+                                    print("\n🔄 Interrupted")
                                     player.clear_queue()
-                                    print("👂 Processing your command...")
                                 
                                 # Handle audio data
                                 elif response.data is not None:
@@ -192,8 +188,6 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                                         try:
                                             # Handle custom end_session tool
                                             if fc.name == "end_session":
-                                                print(f"🎯 Executing end_session tool")
-                                                
                                                 result = await nav_tools.execute_end_session()
                                                 
                                                 function_response = types.FunctionResponse(
@@ -265,7 +259,6 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                         await asyncio.sleep(0.005)
                 
                 session_completed = True
-                print("✅ Session completed")
                         
             except KeyboardInterrupt:
                 print("\n\n👋 User interrupted...")
@@ -298,7 +291,6 @@ async def process_realtime_voice():
     email_manager = EmailManager()
     
     # Initialize MCP app and Gmail agent
-    print("🔧 Initializing MCP-Agent framework...")
     mcp_app = MCPApp(name="voice_gmail_agent")
     await mcp_app.initialize()
     
@@ -315,10 +307,8 @@ async def process_realtime_voice():
     
     # Get available tools from MCP and convert to Gemini format
     mcp_tools_result = await gmail_agent.list_tools()
-    print(f"✅ Connected to Gmail MCP server with {len(mcp_tools_result.tools)} tools")
     
     # Fetch emails from inbox before starting voice session
-    print("\n📧 Fetching emails from inbox...")
     try:
         # Search for inbox emails using the correct Gmail MCP tool
         search_result = await gmail_agent.call_tool(
@@ -338,15 +328,11 @@ async def process_realtime_voice():
             
     except Exception as e:
         print(f"⚠️ Error fetching emails: {e}")
-        print("Exiting...")
         return
     
     # Dynamically convert MCP tools to Gemini format
     gemini_tools = []
-    print("\n📋 Available Gmail operations:")
-    for tool in mcp_tools_result.tools:
-        print(f"  - {tool.name}: {tool.description}")
-        
+    for tool in mcp_tools_result.tools:        
         # Extract parameters, filtering out schema metadata
         parameters = {}
         if hasattr(tool, 'inputSchema') and tool.inputSchema:
@@ -372,17 +358,6 @@ async def process_realtime_voice():
     # Add custom end_session tool
     end_session_tool = nav_tools.get_end_session_tool()
     gemini_tools.append(end_session_tool)
-    print(f"  - end_session: End the current email session and move to next email")
-    
-    print("\n🎤 Voice-driven Gmail Assistant Started!")
-    print("📧 Processing emails one at a time with fresh sessions")
-    print("💬 For each email:")
-    print("   - The assistant will read the sender and subject")
-    print("   - You can take action: Reply, Archive, Delete, Mark as read/unread")
-    print("   - Say 'Next' or 'Skip' to move to the next email")
-    print("   - Each email gets a fresh conversation context")
-    print("Press Ctrl+C to exit")
-    print("\n" + "="*50)
     
     try:
         # Process emails one by one
@@ -399,7 +374,6 @@ async def process_realtime_voice():
             email_manager.next_email()
             
             if not email_manager.is_exhausted():
-                print("\n⏭️  Moving to next email...")
                 await asyncio.sleep(1)  # Brief pause between sessions
             else:
                 print("\n🎉 All emails processed!")
@@ -416,15 +390,10 @@ async def process_realtime_voice():
 
 async def main():
     """Main function for the voice-driven email agent with direct MCP access"""
-    print("🎤 Voice-driven Gmail Agent with Direct MCP Integration")
-    print("📧 Full Gmail API access through natural language")
-    print("🎙️  Initializing voice input...")
-    
     try:
         await process_realtime_voice()
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
-        print("Please check your configuration and try again.")
 
 if __name__ == "__main__":
     try:

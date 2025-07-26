@@ -2,7 +2,7 @@ execution_engine: asyncio
 
 logger:
   transports: [console]
-  level: info
+  level: error
   
 mcp:
   servers:
