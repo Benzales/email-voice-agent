@@ -134,151 +134,169 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
     session_completed = False
     
     try:
-        async with client.aio.live.connect(model=model, config=config) as session:
-            
-            print(f"📧 Processing Email {email_manager.current_index + 1}/{len(email_manager.emails)}")
-            
-            try:
-                # Start recording
-                recorder.start_recording()  # TODO: we don't want to start recording during testing since we'll be using the test audio files
-                player.start_output_stream()
+        # Ensure clean session with timeout
+        session_timeout = 120.0  # 2 minute timeout per email session
+        async with asyncio.timeout(session_timeout):
+            async with client.aio.live.connect(model=model, config=config) as session:
                 
-                # Audio streaming task
-                async def stream_audio():
-                    """Continuously stream audio data to Gemini without interruption"""
-                    while not nav_tools.should_end_session():
-                        try:
-                            audio_data = recorder.get_audio_data()
-                            if audio_data:
-                                await session.send_realtime_input(
-                                    audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
-                                )
-                        except Exception as e:
-                            print(f"⚠️ Audio streaming error: {e}")
-                            await send_error_message(session, f"Audio streaming issue: {str(e)}")
-                        await asyncio.sleep(0.005)
-                
-                # Start audio streaming
-                audio_task = asyncio.create_task(stream_audio())
-                
-                # Send initial email information to agent
-                await session.send_realtime_input(
-                    text=f"Please read me this email and ask what I'd like to do with it. The email is: From {sender} - {subject} [Current email ID: {email_id}]."  #TODO: can remove email id and ensure every tool call has access to the email id. 
-                )
-                
-                # Main response processing loop
-                while not nav_tools.should_end_session():
-                    try:
-                        async for response in session.receive():
-                            try:
-                                # Handle interruptions
-                                if response.server_content and response.server_content.interrupted is True:
-                                    print("\n🔄 Interrupted")
-                                    player.clear_queue()
-                                
-                                # Handle audio data
-                                elif response.data is not None:
-                                    player.queue_audio(response.data)
-                                
-                                # Handle tool calls
-                                elif response.tool_call:
-                                    function_responses = []
-                                    
-                                    for fc in response.tool_call.function_calls:
-                                        try:
-                                            # Handle custom end_session tool
-                                            if fc.name == "end_session":
-                                                result = await nav_tools.execute_end_session()
-                                                
-                                                function_response = types.FunctionResponse(
-                                                    id=fc.id,
-                                                    name=fc.name,
-                                                    response=result
-                                                )
-                                                function_responses.append(function_response)
-                                            
-                                            # Handle MCP tools
-                                            else:
-                                                print(f"🎯 Executing {fc.name} with args: {dict(fc.args)}")
-                                                
-                                                result = await gmail_agent.call_tool(
-                                                    fc.name,
-                                                    arguments=dict(fc.args)
-                                                )
-                                                
-                                                # Extract text content from MCP result
-                                                response_content = {}
-                                                if hasattr(result, 'content') and result.content:
-                                                    text_parts = []
-                                                    for content_item in result.content:
-                                                        if hasattr(content_item, 'text'):
-                                                            text_parts.append(content_item.text)
-                                                    response_content["result"] = "\n".join(text_parts)
-                                                else:
-                                                    response_content["result"] = "Tool executed successfully"
-                                                
-                                                # Create function response
-                                                function_response = types.FunctionResponse(
-                                                    id=fc.id,
-                                                    name=fc.name,
-                                                    response=response_content
-                                                )
-                                                function_responses.append(function_response)
-                                        
-                                        except Exception as tool_error:
-                                            print(f"⚠️ Tool call error for {fc.name}: {tool_error}")
-                                            error_response = types.FunctionResponse(
-                                                id=fc.id,
-                                                name=fc.name,
-                                                response={"result": f"Error: {str(tool_error)}"}
-                                            )
-                                            function_responses.append(error_response)
-                                    
-                                    # Send tool responses
-                                    await session.send_tool_response(function_responses=function_responses)
-                                    
-                                    # Check if session should end after tool execution
-                                    if nav_tools.should_end_session():
-                                        break
-                                        
-                            except Exception as response_error:
-                                print(f"⚠️ Error processing response: {response_error}")
-                                await send_error_message(session, f"Response processing error: {str(response_error)}")
-                            
-                            # Break if session should end
-                            if nav_tools.should_end_session():
-                                break
-                        
-                        await asyncio.sleep(0.005)
-                        
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        print(f"⚠️ Error in processing loop: {e}")
-                        await send_error_message(session, f"Processing error: {str(e)}")
-                        await asyncio.sleep(0.005)
-                
-                session_completed = True
-                        
-            except KeyboardInterrupt:
-                print("\n\n👋 User interrupted...")
-                return False  # Stop processing emails
-            except Exception as session_error:
-                print(f"⚠️ Session error: {session_error}")
-            finally:
-                # Cancel audio streaming task
-                if 'audio_task' in locals():
-                    try:
-                        audio_task.cancel()
-                    except Exception as e:
-                        print(f"⚠️ Error canceling audio task: {e}")
+                print(f"📧 Processing Email {email_manager.current_index + 1}/{len(email_manager.emails)}")
                 
                 try:
-                    recorder.stop_recording()
-                    recorder.audio.terminate()
-                    player.close()
-                except Exception as e:
-                    print(f"⚠️ Error cleaning up audio resources: {e}")
+                    # Start recording
+                    recorder.start_recording()  # TODO: we don't want to start recording during testing since we'll be using the test audio files
+                    player.start_output_stream()
+                    
+                    # Audio streaming task
+                    async def stream_audio():
+                        """Continuously stream audio data to Gemini without interruption"""
+                        while not nav_tools.should_end_session():
+                            try:
+                                audio_data = recorder.get_audio_data()
+                                if audio_data:
+                                    await session.send_realtime_input(
+                                        audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
+                                    )
+                            except Exception as e:
+                                print(f"⚠️ Audio streaming error: {e}")
+                                await send_error_message(session, f"Audio streaming issue: {str(e)}")
+                            await asyncio.sleep(0.005)
+                    
+                    # Start audio streaming
+                    audio_task = asyncio.create_task(stream_audio())
+                    
+                    # Send initial email information to agent
+                    await session.send_realtime_input(
+                        text=f"Please read me this email and ask what I'd like to do with it. The email is: From {sender} - {subject} [Current email ID: {email_id}]."  #TODO: can remove email id and ensure every tool call has access to the email id. 
+                    )
+                    
+                    # Main response processing loop
+                    while not nav_tools.should_end_session():
+                        try:
+                            async for response in session.receive():
+                                try:
+                                    # Handle interruptions
+                                    if response.server_content and response.server_content.interrupted is True:
+                                        print("\n🔄 Interrupted")
+                                        player.clear_queue()
+                                    
+                                    # Handle audio data
+                                    elif response.data is not None:
+                                        player.queue_audio(response.data)
+                                    
+                                    # Handle tool calls
+                                    elif response.tool_call:
+                                        function_responses = []
+                                        
+                                        for fc in response.tool_call.function_calls:
+                                            try:
+                                                # Handle custom end_session tool
+                                                if fc.name == "end_session":
+                                                    result = await nav_tools.execute_end_session()
+                                                    
+                                                    function_response = types.FunctionResponse(
+                                                        id=fc.id,
+                                                        name=fc.name,
+                                                        response=result
+                                                    )
+                                                    function_responses.append(function_response)
+                                                
+                                                # Handle MCP tools
+                                                else:
+                                                    print(f"🎯 Executing {fc.name} with args: {dict(fc.args)}")
+                                                    
+                                                    result = await gmail_agent.call_tool(
+                                                        fc.name,
+                                                        arguments=dict(fc.args)
+                                                    )
+                                                    
+                                                    # Extract text content from MCP result
+                                                    response_content = {}
+                                                    if hasattr(result, 'content') and result.content:
+                                                        text_parts = []
+                                                        for content_item in result.content:
+                                                            if hasattr(content_item, 'text'):
+                                                                text_parts.append(content_item.text)
+                                                        response_content["result"] = "\n".join(text_parts)
+                                                    else:
+                                                        response_content["result"] = "Tool executed successfully"
+                                                    
+                                                    # Create function response
+                                                    function_response = types.FunctionResponse(
+                                                        id=fc.id,
+                                                        name=fc.name,
+                                                        response=response_content
+                                                    )
+                                                    function_responses.append(function_response)
+                                            
+                                            except Exception as tool_error:
+                                                print(f"⚠️ Tool call error for {fc.name}: {tool_error}")
+                                                error_response = types.FunctionResponse(
+                                                    id=fc.id,
+                                                    name=fc.name,
+                                                    response={"result": f"Error: {str(tool_error)}"}
+                                                )
+                                                function_responses.append(error_response)
+                                        
+                                        # Send tool responses
+                                        await session.send_tool_response(function_responses=function_responses)
+                                        
+                                        # Check if session should end after tool execution
+                                        if nav_tools.should_end_session():
+                                            break
+                                            
+                                except Exception as response_error:
+                                    print(f"⚠️ Error processing response: {response_error}")
+                                    await send_error_message(session, f"Response processing error: {str(response_error)}")
+                                
+                                # Break if session should end
+                                if nav_tools.should_end_session():
+                                    break
+                            
+                            await asyncio.sleep(0.005)
+                            
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as e:
+                            print(f"⚠️ Error in processing loop: {e}")
+                            await send_error_message(session, f"Processing error: {str(e)}")
+                            await asyncio.sleep(0.005)
+                    
+                    session_completed = True
+                            
+                except KeyboardInterrupt:
+                    print("\n\n👋 User interrupted...")
+                    return False  # Stop processing emails
+                except Exception as session_error:
+                    print(f"⚠️ Session error: {session_error}")
+                finally:
+                    # Cancel audio streaming task with timeout
+                    if 'audio_task' in locals():
+                        try:
+                            audio_task.cancel()
+                            # Wait for cancellation to complete with timeout
+                            try:
+                                await asyncio.wait_for(audio_task, timeout=2.0)
+                            except (asyncio.CancelledError, asyncio.TimeoutError):
+                                pass  # Expected when cancelling
+                            except Exception as e:
+                                print(f"⚠️ Error during task cancellation: {e}")
+                        except Exception as e:
+                            print(f"⚠️ Error canceling audio task: {e}")
+                    
+                    # Enhanced audio resource cleanup
+                    try:
+                        if 'recorder' in locals() and recorder:
+                            recorder.stop_recording()
+                            if hasattr(recorder, 'audio') and recorder.audio:
+                                recorder.audio.terminate()
+                    except Exception as e:
+                        print(f"⚠️ Error cleaning up recorder: {e}")
+                    
+                    try:
+                        if 'player' in locals() and player:
+                            player.close()
+                    except Exception as e:
+                        print(f"⚠️ Error cleaning up player: {e}")
     
     except Exception as connection_error:
         print(f"❌ Failed to connect to Gemini: {connection_error}")
@@ -384,16 +402,75 @@ async def process_realtime_voice():
     except Exception as e:
         print(f"❌ Unexpected error in main loop: {e}")
     finally:
-        # Cleanup MCP connection
-        if gmail_agent:
-            await gmail_agent.__aexit__(None, None, None)
+        # Enhanced MCP connection cleanup
+        cleanup_errors = []
+        
+        # Cleanup Gmail agent
+        if 'gmail_agent' in locals() and gmail_agent:
+            try:
+                await gmail_agent.__aexit__(None, None, None)
+            except Exception as e:
+                cleanup_errors.append(f"Gmail agent cleanup: {e}")
+        
+        # Cleanup MCP app
+        if 'mcp_app' in locals() and mcp_app:
+            try:
+                # Force cleanup of MCP app connections
+                if hasattr(mcp_app, 'cleanup'):
+                    await mcp_app.cleanup()
+                elif hasattr(mcp_app, '__aexit__'):
+                    await mcp_app.__aexit__(None, None, None)
+            except Exception as e:
+                cleanup_errors.append(f"MCP app cleanup: {e}")
+        
+        # Report any cleanup errors
+        if cleanup_errors:
+            print(f"⚠️ Cleanup errors: {'; '.join(cleanup_errors)}")
+        
+        # Force garbage collection to help with resource cleanup
+        import gc
+        gc.collect()
+
+async def cleanup_resources(*resources):
+    """Helper function to cleanup multiple resources safely"""
+    cleanup_errors = []
+    
+    for resource in resources:
+        if resource is None:
+            continue
+            
+        try:
+            # Try different cleanup methods based on resource type
+            if hasattr(resource, '__aexit__'):
+                await resource.__aexit__(None, None, None)
+            elif hasattr(resource, 'cleanup'):
+                if asyncio.iscoroutinefunction(resource.cleanup):
+                    await resource.cleanup()
+                else:
+                    resource.cleanup()
+            elif hasattr(resource, 'close'):
+                if asyncio.iscoroutinefunction(resource.close):
+                    await resource.close()
+                else:
+                    resource.close()
+            elif hasattr(resource, 'terminate'):
+                resource.terminate()
+        except Exception as e:
+            cleanup_errors.append(f"{type(resource).__name__}: {e}")
+    
+    if cleanup_errors:
+        print(f"⚠️ Resource cleanup errors: {'; '.join(cleanup_errors)}")
 
 async def main():
     """Main function for the voice-driven email agent with direct MCP access"""
     try:
-        await process_realtime_voice()
+        # Add timeout to prevent hanging in test environments
+        await asyncio.wait_for(process_realtime_voice(), timeout=300.0)  # 5 minute timeout
+    except asyncio.TimeoutError:
+        print("⏰ Main process timed out after 5 minutes")
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
+        traceback.print_exc()
 
 if __name__ == "__main__":
     try:
