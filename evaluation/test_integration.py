@@ -156,26 +156,26 @@ def gmail_mock():
 
 
 @pytest.fixture
-def end_session_tracker():
-    """Fixture for tracking end_session calls while executing real function"""
+def complete_current_email_tracker():
+    """Fixture for tracking complete_current_email calls while executing real function"""
     call_count = 0
-    original_execute_end_session = main.EmailNavigationTools.execute_end_session
+    original_execute_complete_current_email = main.EmailNavigationTools.execute_complete_current_email
     
-    async def wrapped_execute_end_session(self):
+    async def wrapped_execute_complete_current_email(self):
         nonlocal call_count
         call_count += 1
-        return await original_execute_end_session(self)
+        return await original_execute_complete_current_email(self)
     
     # Return both the wrapper and a way to check call count
-    class EndSessionTracker:
+    class CompleteCurrentEmailTracker:
         def __init__(self):
-            self.wrapper = wrapped_execute_end_session
+            self.wrapper = wrapped_execute_complete_current_email
             
         @property
         def call_count(self):
             return call_count
     
-    return EndSessionTracker()
+    return CompleteCurrentEmailTracker()
 
 
 @pytest.fixture
@@ -208,24 +208,24 @@ def mock_gmail_system(gmail_mock):
 
 
 @pytest.fixture  
-def mock_end_session_system(end_session_tracker):
-    """Fixture that patches end_session with tracking"""
-    with patch.object(main.EmailNavigationTools, 'execute_end_session', end_session_tracker.wrapper):
+def mock_complete_current_email_system(complete_current_email_tracker):
+    """Fixture that patches complete_current_email with tracking"""
+    with patch.object(main.EmailNavigationTools, 'execute_complete_current_email', complete_current_email_tracker.wrapper):
         yield
 
 
 # Test Functions - Clean and Focused
 
 @pytest.mark.asyncio
-async def test_archive_email(audio_mock, gmail_mock, end_session_tracker, 
-                           mock_audio_system, mock_gmail_system, mock_end_session_system):
+async def test_archive_email(audio_mock, gmail_mock, complete_current_email_tracker, 
+                           mock_audio_system, mock_gmail_system, mock_complete_current_email_system):
     """Test archiving an email using voice command from archive.wav"""
     
     # Test execution - all setup is handled by fixtures
     try:
         await asyncio.wait_for(main.main(), timeout=15.0)
     except asyncio.TimeoutError:
-        pytest.fail("Test timed out - end_session may not have worked properly")
+        pytest.fail("Test timed out - complete_current_email may not have worked properly")
                                     
     # Verification - clean and focused on test logic
     assert audio_mock.call_count > 0, "Audio should have been processed"
@@ -243,8 +243,8 @@ async def test_archive_email(audio_mock, gmail_mock, end_session_tracker,
     assert 'removeLabelIds' in archive_call['arguments'], "Archive should remove labels"
     assert 'INBOX' in archive_call['arguments']['removeLabelIds'], "Archive should remove INBOX label"
     
-    # Verify that end_session tool was called to move to next email
-    assert end_session_tracker.call_count > 0, "Expected end_session to be called after email action"
+    # Verify that complete_current_email tool was called to move to next email
+    assert complete_current_email_tracker.call_count > 0, "Expected complete_current_email to be called after email action"
 
 
 # Future tests can easily reuse fixtures

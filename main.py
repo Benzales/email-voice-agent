@@ -189,9 +189,9 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                                         
                                         for fc in response.tool_call.function_calls:
                                             try:
-                                                # Handle custom end_session tool
-                                                if fc.name == "end_session":
-                                                    result = await nav_tools.execute_end_session()
+                                                # Handle custom complete_current_email tool
+                                                if fc.name == "complete_current_email":
+                                                    result = await nav_tools.execute_complete_current_email()
                                                     
                                                     function_response = types.FunctionResponse(
                                                         id=fc.id,
@@ -373,9 +373,9 @@ async def process_realtime_voice():
     # Create custom navigation tools
     nav_tools = EmailNavigationTools(email_manager)
     
-    # Add custom end_session tool
-    end_session_tool = nav_tools.get_end_session_tool()
-    gemini_tools.append(end_session_tool)
+    # Add custom complete_current_email tool
+    complete_current_email_tool = nav_tools.get_complete_current_email_tool()
+    gemini_tools.append(complete_current_email_tool)
     
     try:
         # Process emails one by one

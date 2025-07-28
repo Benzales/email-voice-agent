@@ -13,12 +13,12 @@ class EmailNavigationTools:
         self.email_manager = email_manager
         self.session_should_end = False
     
-    def get_end_session_tool(self) -> types.Tool:
-        """Create a Gemini tool for ending the current session"""
+    def get_complete_current_email_tool(self) -> types.Tool:
+        """Create a Gemini tool for completing the current email's processing"""
         return types.Tool(
             function_declarations=[{
-                "name": "end_session",
-                "description": "End the current email session. Call this when the user says 'next', 'skip', or similar navigation commands, or after completing any action on an email (archive, delete, reply, etc.).",
+                "name": "complete_current_email",
+                "description": "Complete processing of the current email and move to the next one. Call this when the user says 'next', 'skip', or similar navigation commands, or after completing any action on an email (archive, delete, reply, etc.).",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -27,8 +27,8 @@ class EmailNavigationTools:
             }]
         )
     
-    async def execute_end_session(self) -> Dict[str, Any]:
-        """Execute the end session command"""
+    async def execute_complete_current_email(self) -> Dict[str, Any]:
+        """Execute the complete current email command"""
         try:
             self.session_should_end = True
             
@@ -36,20 +36,20 @@ class EmailNavigationTools:
                 return {
                     "success": True,
                     "message": "Moving to next email...",
-                    "action": "end_session_continue"
+                    "action": "complete_current_email_continue"
                 }
             else:
                 return {
                     "success": True,
                     "message": "You've reached the end of your inbox. All emails have been reviewed.",
-                    "action": "end_session_complete"
+                    "action": "complete_current_email_complete"
                 }
                 
         except Exception as e:
             return {
                 "success": False,
-                "message": f"Error ending session: {str(e)}",
-                "action": "end_session_error"
+                "message": f"Error completing current email: {str(e)}",
+                "action": "complete_current_email_error"
             }
     
     def should_end_session(self) -> bool:
