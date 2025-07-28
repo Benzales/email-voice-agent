@@ -166,3 +166,97 @@ The `test_archive_multiple_emails` test uses event-based synchronization to coor
 3. **Monitors Progress**: Tracks `complete_current_email` calls to know when to proceed to the next email.
 
 This approach is more robust than trying to track agent speaking state and reflects real-world voice interaction patterns where interruptions are common and expected.
+
+# Comprehensive Test Suite Plan
+
+## Goals
+
+To ensure the reliability and robustness of the email voice agent, we will implement a comprehensive test suite that covers all aspects of the system. This suite will:
+- Test every available tool call (Gmail actions, session management, etc.)
+- Validate sequential email processing (exactly 3 actions per test for most tests, to keep tests concise)
+- Ensure correct session and workflow management
+
+## List of Actions and Tool Mapping
+
+The following actions are covered by the test suite, with their corresponding tool names:
+
+### Actions That Trigger `complete_current_email`
+These actions complete processing of the current email and move to the next:
+
+- **Send Email** (`gmail_send_email`)
+- **Draft Email** (`gmail_draft_email`)
+- **Delete Email** (`gmail_delete_email`)
+- **Mark as Unread** (`gmail_modify_email` with 'mark unread')
+- **Mark as Read** (`gmail_modify_email` with 'mark read')
+- **Archive Email** (`gmail_modify_email` with 'archive')
+- **Move to Label** (`gmail_modify_email` with 'move to label')
+
+### Actions That Shouldn't Trigger `complete_current_email`
+These actions do not move to the next email because the current email still needs to be processed:
+
+- **Read Email** (`gmail_read_email`)
+- **List Labels** (`gmail_list_email_labels`)
+- **Create Label** (`gmail_create_label`)
+- **Update Label** (`gmail_update_label`)
+- **Delete Label** (`gmail_delete_label`)
+
+## What Will Be Tested
+
+### 1. **Every Action**
+- Every action will be tested with exactly 3 calls to action on 3 different emails.
+
+### 2. **Sequential Actions**
+- Every test will perform exactly two actions on 2 different emails in sequence (e.g., archive then mark unread, or delete then mark read email)
+
+### 3. **Session and Workflow Management**
+- Verify that sessions start and end correctly by asserting that complete_current_email is called after each action
+- Test that the agent can resume after interruptions or errors
+
+## Example Test Scenarios
+
+Each test scenario will process exactly 3 emails from the Gmail search results, performing the same action 3 times with different phrasings:
+
+- **Archive 3 emails**: Process 3 emails in sequence, each with a different way of saying "archive" (e.g., "archive this email", "move this to archive", "get rid of this email")
+- **Delete 3 emails**: Process 3 emails in sequence, each with a different way of saying "delete" (e.g., "delete this email", "remove this message", "trash this")
+- **Mark 3 emails as unread**: Process 3 emails in sequence, each with different phrasing for marking unread (e.g., "mark as unread", "make this unread", "I haven't read this yet")
+
+## Audio Input Collection
+- Record 3 WAV files for each action and scenario
+- Organize files by action and scenario (see folder structure below)
+- Document the intended command and expected outcome for each file
+
+---
+
+## Evaluation Folder Structure
+
+To organize the comprehensive test suite, the `evaluation` folder will be structured as follows:
+
+```
+evaluation/
+  README.md
+  test_integration.py
+  audio_inputs/
+    archive/
+      archive_1.wav
+      archive_2.wav
+      archive_3.wav
+    delete/
+      delete_1.wav
+      delete_2.wav
+      delete_3.wav
+    mark_unread/
+      mark_unread_1.wav
+      mark_unread_2.wav
+      mark_unread_3.wav
+    # ...repeat for each action
+  scenarios/
+    test_archive_three_emails.py
+    test_delete_three_emails.py
+    # ...one script per scenario if needed
+```
+
+- `audio_inputs/` contains subfolders for each action, each with 3 main phrasings.
+- `test_integration.py` contains tests for each scenario.
+- `README.md` documents the test plan.
+
+---
