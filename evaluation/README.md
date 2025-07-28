@@ -148,4 +148,21 @@ Pytest will provide detailed output showing:
 Example successful output:
 ```
 test_integration.py::test_archive_email PASSED [100%]
+test_integration.py::test_archive_multiple_emails PASSED [100%]
 ```
+
+## Multiple Email Testing
+
+The test suite includes a sophisticated test for processing multiple emails in sequence:
+
+### Synchronization Approach
+
+The `test_archive_multiple_emails` test uses event-based synchronization to coordinate audio input across multiple emails:
+
+1. **Accepts Interruptions**: Rather than trying to prevent interruptions (which are normal in voice interfaces), the test allows them to happen and verifies the agent recovers correctly.
+
+2. **Event-Based Coordination**: Uses `asyncio.Event` to signal when each email processing is complete before sending the next audio input.
+
+3. **Monitors Progress**: Tracks `complete_current_email` calls to know when to proceed to the next email.
+
+This approach is more robust than trying to track agent speaking state and reflects real-world voice interaction patterns where interruptions are common and expected.

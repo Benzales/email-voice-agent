@@ -40,6 +40,9 @@ class AudioStreamMock:
         self.chunk_index = 0
         self.agent_is_speaking = False
         self.call_count = 0
+        # Allow control over when audio is sent
+        self.paused = False
+        self.should_send_audio = True
         
     def _load_and_convert_wav(self) -> List[bytes]:
         """Load WAV file and convert to PCM chunks using ffmpeg"""
@@ -85,11 +88,11 @@ class AudioStreamMock:
         return chunks
     
     def get_audio_data(self) -> bytes:
-        """Return next audio chunk, respecting agent speaking state"""
+        """Return next audio chunk, respecting pause state"""
         self.call_count += 1
         
-        # Don't send audio while agent is speaking (non-interrupting behavior)
-        if self.agent_is_speaking:
+        # Don't send audio if paused or disabled
+        if self.paused or not self.should_send_audio:
             return b''
             
         # Return chunks sequentially, then empty bytes
@@ -99,13 +102,65 @@ class AudioStreamMock:
             return chunk
             
         return b''
+    
+    def reset_for_next_input(self):
+        """Reset to start of audio for next input"""
+        self.chunk_index = 0
+        self.paused = False
+
+
+class MultiEmailAudioStreamMock(AudioStreamMock):
+    """Enhanced mock that coordinates audio input for multiple emails
+    
+    This mock implements event-based synchronization to ensure audio inputs are
+    sent at the right time when processing multiple emails. Rather than trying
+    to prevent interruptions (which are normal in voice interfaces), it monitors
+    when each email is completed via complete_current_email() calls and only
+    then sends the next audio input.
+    
+    This approach is more robust than tracking agent speaking state and handles
+    the natural flow of voice interaction where interruptions can occur.
+    """
+    
+    def __init__(self, wav_path: str, num_emails: int):
+        super().__init__(wav_path)
+        self.num_emails = num_emails
+        self.current_email_index = 0
+        self.complete_email_event = asyncio.Event()
+        # Start paused - we'll unpause when ready
+        self.paused = True
+        
+    async def wait_and_send_next_audio(self):
+        """Wait for current email to complete, then send audio for next email"""
+        if self.current_email_index < self.num_emails:
+            # Unpause to send audio for current email
+            self.paused = False
+            
+            # Wait for this email to be completed
+            await self.complete_email_event.wait()
+            self.complete_email_event.clear()
+            
+            # Move to next email
+            self.current_email_index += 1
+            
+            # Reset audio for next input
+            if self.current_email_index < self.num_emails:
+                await asyncio.sleep(0.5)  # Brief pause between emails
+                self.reset_for_next_input()
+                # Recurse to handle next email
+                await self.wait_and_send_next_audio()
+    
+    def signal_email_completed(self):
+        """Signal that current email processing is complete"""
+        self.complete_email_event.set()
 
 
 class GmailToolMock:
     """Mock for gmail_agent.call_tool() that returns controlled responses"""
     
-    def __init__(self):
+    def __init__(self, num_emails: int = 1):
         self.tool_calls = []  # Track all tool calls for verification
+        self.num_emails = num_emails
         
     async def mock_call_tool(self, tool_name: str, arguments: dict) -> Any:
         """Mock Gmail tool execution"""
@@ -117,13 +172,25 @@ class GmailToolMock:
         
         # Return appropriate mock response based on tool
         if tool_name == "gmail_search_emails":
-            # Mock email search results
+            # Mock email search results - return multiple emails if configured
             result = MagicMock()
             result.content = [MagicMock()]
-            result.content[0].text = """ID: 123abc
+            
+            if self.num_emails == 1:
+                result.content[0].text = """ID: 123abc
 Subject: Project Update
 From: alice@example.com  
 Date: 2024-01-15"""
+            else:
+                # Return multiple emails
+                email_texts = []
+                for i in range(self.num_emails):
+                    email_texts.append(f"""ID: {i+1}23abc
+Subject: Email {i+1} - Project Update
+From: sender{i+1}@example.com
+Date: 2024-01-{15+i:02d}""")
+                result.content[0].text = "\n\n".join(email_texts)
+                
             return result
             
         elif tool_name == "gmail_modify_email":
@@ -149,6 +216,12 @@ def audio_mock():
     return AudioStreamMock('input/archive.wav')
 
 
+@pytest.fixture
+def multi_email_audio_mock():
+    """Fixture providing multi-email audio stream mock"""
+    return MultiEmailAudioStreamMock('input/archive.wav', num_emails=2)
+
+
 @pytest.fixture  
 def gmail_mock():
     """Fixture providing configured Gmail tool mock"""
@@ -156,7 +229,13 @@ def gmail_mock():
 
 
 @pytest.fixture
-def complete_current_email_tracker():
+def multi_email_gmail_mock():
+    """Fixture providing Gmail mock configured for multiple emails"""
+    return GmailToolMock(num_emails=2)
+
+
+@pytest.fixture
+def complete_current_email_tracker(multi_email_audio_mock=None):
     """Fixture for tracking complete_current_email calls while executing real function"""
     call_count = 0
     original_execute_complete_current_email = main.EmailNavigationTools.execute_complete_current_email
@@ -164,6 +243,11 @@ def complete_current_email_tracker():
     async def wrapped_execute_complete_current_email(self):
         nonlocal call_count
         call_count += 1
+        
+        # Signal audio mock if we have one
+        if multi_email_audio_mock:
+            multi_email_audio_mock.signal_email_completed()
+            
         return await original_execute_complete_current_email(self)
     
     # Return both the wrapper and a way to check call count
@@ -181,20 +265,11 @@ def complete_current_email_tracker():
 @pytest.fixture
 def mock_audio_system(audio_mock):
     """Fixture that patches all audio-related components"""
-    
-    def track_agent_speaking(self, audio_data):
-        audio_mock.agent_is_speaking = True
-        asyncio.create_task(clear_speaking_flag())
-    
-    async def clear_speaking_flag():
-        await asyncio.sleep(0.1)
-        audio_mock.agent_is_speaking = False
-    
     with patch('pyaudio.PyAudio', MockPyAudio), \
          patch.object(main.AudioRecorder, 'get_audio_data', side_effect=audio_mock.get_audio_data), \
          patch.object(main.AudioRecorder, 'start_recording', return_value=None), \
          patch.object(main.AudioRecorder, 'stop_recording', return_value=None), \
-         patch.object(main.AudioPlayer, 'queue_audio', track_agent_speaking), \
+         patch.object(main.AudioPlayer, 'queue_audio', return_value=None), \
          patch.object(main.AudioPlayer, 'start_output_stream', return_value=None), \
          patch.object(main.AudioPlayer, 'close', return_value=None):
         yield
@@ -245,6 +320,77 @@ async def test_archive_email(audio_mock, gmail_mock, complete_current_email_trac
     
     # Verify that complete_current_email tool was called to move to next email
     assert complete_current_email_tracker.call_count > 0, "Expected complete_current_email to be called after email action"
+
+
+@pytest.mark.asyncio
+async def test_archive_multiple_emails():
+    """Test archiving multiple emails in sequence"""
+    # Create fixtures with multi-email configuration
+    multi_audio_mock = MultiEmailAudioStreamMock('input/archive.wav', num_emails=2)
+    multi_gmail_mock = GmailToolMock(num_emails=2)
+    
+    # Create tracker that signals audio mock
+    call_count = 0
+    original_execute = main.EmailNavigationTools.execute_complete_current_email
+    
+    async def wrapped_execute(self):
+        nonlocal call_count
+        call_count += 1
+        multi_audio_mock.signal_email_completed()
+        return await original_execute(self)
+    
+    # Apply all patches
+    with patch('pyaudio.PyAudio', MockPyAudio), \
+         patch.object(main.AudioRecorder, 'get_audio_data', side_effect=multi_audio_mock.get_audio_data), \
+         patch.object(main.AudioRecorder, 'start_recording', return_value=None), \
+         patch.object(main.AudioRecorder, 'stop_recording', return_value=None), \
+         patch.object(main.AudioPlayer, 'queue_audio', return_value=None), \
+         patch.object(main.AudioPlayer, 'start_output_stream', return_value=None), \
+         patch.object(main.AudioPlayer, 'close', return_value=None), \
+         patch.object(Agent, 'call_tool', new=multi_gmail_mock.mock_call_tool), \
+         patch.object(main.EmailNavigationTools, 'execute_complete_current_email', wrapped_execute):
+        
+        # Start the audio coordination task
+        audio_task = asyncio.create_task(multi_audio_mock.wait_and_send_next_audio())
+        
+        # Run main with longer timeout for multiple emails
+        try:
+            await asyncio.wait_for(main.main(), timeout=30.0)
+        except asyncio.TimeoutError:
+            pytest.fail("Test timed out processing multiple emails")
+        finally:
+            # Cancel audio task if still running
+            audio_task.cancel()
+            try:
+                await audio_task
+            except asyncio.CancelledError:
+                pass
+    
+    # Verify results
+    assert multi_audio_mock.call_count > 0, "Audio should have been processed"
+    
+    # Should have one search call returning 2 emails
+    search_calls = [c for c in multi_gmail_mock.tool_calls if c['name'] == "gmail_search_emails"]
+    assert len(search_calls) == 1, "Expected exactly one search call"
+    
+    # Should have two archive calls (one per email)
+    modify_calls = [c for c in multi_gmail_mock.tool_calls if c['name'] == "gmail_modify_email"]
+    assert len(modify_calls) == 2, f"Expected 2 modify calls for archiving, got {len(modify_calls)}"
+    
+    # Verify both emails were archived
+    archived_email_ids = set()
+    for call in modify_calls:
+        assert 'removeLabelIds' in call['arguments'], "Archive should remove labels"
+        assert 'INBOX' in call['arguments']['removeLabelIds'], "Archive should remove INBOX label"
+        archived_email_ids.add(call['arguments']['messageId'])
+    
+    # Should have archived both emails with different IDs
+    assert len(archived_email_ids) == 2, "Should have archived 2 different emails"
+    assert '123abc' in archived_email_ids, "First email should be archived"
+    assert '223abc' in archived_email_ids, "Second email should be archived"
+    
+    # Should have moved to next email twice (once after each archive)
+    assert call_count == 2, f"Expected complete_current_email to be called twice, got {call_count}"
 
 
 # Future tests can easily reuse fixtures
