@@ -63,12 +63,12 @@ class AudioPlayer:
         self.playback_thread = None
         self.stop_playback = False
         
-    def start_output_stream(self):
+    def start_output_stream(self, rate: int = 48000):
         """Start the output audio stream"""
         self.output_stream = self.audio.open(
             format=pyaudio.paInt16,
             channels=1,
-            rate=24000,
+            rate=rate,
             output=True,
             frames_per_buffer=CHUNK
         )
