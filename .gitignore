@@ -1,3 +1,66 @@
+# OS / Editor
+.DS_Store
+.AppleDouble
+Thumbs.db
+.idea/
+.vscode/
+.history
+*.swp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.python-version
+.venv/
+venv/
+env/
+ENV/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+dist/
+build/
+pip-wheel-metadata/
+*.egg-info/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Env files (keep examples committed)
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+web/.env
+web/.env.*
+!web/.env.example
+
+# Node / Next.js (frontend)
+web/node_modules/
+web/.next/
+web/.vercel/
+web/.turbo/
+web/out/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Project-specific
+mcp_agent.secrets.yaml
+.cache/
+tmp/
+logs/
+*.log
+*.pcm
+*.wav
+
 # OAuth Credentials
 credentials.json
 token.pickle
