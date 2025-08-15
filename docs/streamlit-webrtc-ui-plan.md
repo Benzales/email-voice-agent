@@ -27,9 +27,9 @@ Browser-based mic/speaker UI (Streamlit) that keeps the current Gemini Live + MC
   - On `recv_audio_frame`: convert `av.AudioFrame` to mono 16 kHz 16-bit PCM and `bridge.put_user_audio(...)`
   - On “send” side: pull from `bridge.get_ai_audio(...)`, convert PCM 16 kHz → 48 kHz `av.AudioFrame` for browser playback
 - **UI controls**:
-  - Start: initializes MCP, fetches inbox, builds tools, starts a background task for the per-email session loop
+  - Start: initializes UI state, then calls helpers from `main.py` to init MCP/Agent, fetch inbox, and build tools; starts background per-email loop
   - Stop: signals bridge and session to end; cleans up
-- **State**: Store `EmailManager`, `nav_tools`, `gmail_agent`, `gemini_task`, `bridge` in `st.session_state`.
+- **State**: Store `EmailManager`, `nav_tools`, `gmail_agent`, `gemini_task`, `bridge` in `st.session_state` to avoid re-inits on reruns.
 
 ### Concurrency model
 - **Background task**: Run the Gemini session loop in an asyncio task per Streamlit session.
@@ -65,8 +65,8 @@ Browser-based mic/speaker UI (Streamlit) that keeps the current Gemini Live + MC
 ### Rollout steps
 1. Create `AudioBridge` abstraction and refactor `process_single_email_session` to use it.
 2. Add Streamlit app that:
-   - Initializes MCP/Gmail agent and tools on Start
    - Creates `webrtc_streamer` with audio processor bound to the bridge
+   - Uses extracted helpers from `main.py` to initialize MCP/Gmail agent and fetch inbox on Start
    - Spawns asyncio task running the existing per-email loop
 3. Implement resampling utilities and robust queues.
 4. Add Stop handler and reliable cleanup.
