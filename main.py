@@ -116,7 +116,7 @@ async def send_error_message(session, error_message):
     except Exception as e:
         print(f"Failed to send error message to session: {e}")
 
-async def process_single_email_session(email_manager, nav_tools, gmail_agent, gemini_tools):
+async def process_single_email_session(email_manager, nav_tools, gmail_agent, gemini_tools, audio_bridge=None):
     """Process a single email in its own session"""
     current_email = email_manager.get_current_email()
     if not current_email:
@@ -130,7 +130,12 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
     sender = current_email.get('from', 'Unknown')
     subject = current_email.get('subject', 'No subject')
     
-    bridge = LocalAudioBridge()
+    # Use provided bridge or default to LocalAudioBridge
+    if audio_bridge is None:
+        from audio_local_bridge import LocalAudioBridge
+        bridge = LocalAudioBridge()
+    else:
+        bridge = audio_bridge
     def _is_base64_ascii(b: bytes, probe: int = 128) -> bool:
         try:
             sample = b[:probe].decode('ascii')

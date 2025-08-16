@@ -138,6 +138,10 @@ class WebRTCAudioBridge(AudioBridge):
         if self._closed:
             return
             
+        # Debug: log when AI audio is received
+        if len(frame_bytes) > 0:
+            print(f"[Bridge] Received AI audio: {len(frame_bytes)} bytes at {sample_rate_hz} Hz")
+            
         try:
             # Convert to float32 for resampling
             audio = np.frombuffer(frame_bytes, dtype=np.int16).astype(np.float32) / 32767.0
