@@ -5,6 +5,7 @@ from typing import Optional
 
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
+import av
 
 from app_helpers import initialize_mcp_and_gmail_agent, fetch_inbox_emails
 from custom_tools import EmailNavigationTools
@@ -42,10 +43,31 @@ def main() -> None:
     status = st.empty()
     current_email_box = st.empty()
 
-    # WebRTC placeholder (we'll wire in Phase 5-6)
-    with st.expander("Audio (browser)"):
-        st.caption("Browser audio will be wired in Phase 5-6.")
-        webrtc_streamer(key="voice", mode=WebRtcMode.SENDRECV, audio_receiver_size=256, video_frame_callback=None)
+    # WebRTC mic loopback (Phase 5)
+    with st.expander("Audio (browser)", expanded=True):
+        st.caption("Phase 5: Mic loopback test. Click Start below, allow mic, and you should hear yourself.")
+        
+        # Audio processor for loopback test
+        class AudioProcessor:
+            def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
+                # Simple passthrough for loopback test
+                return frame
+        
+        ctx = webrtc_streamer(
+            key="voice-loopback",
+            mode=WebRtcMode.SENDRECV,
+            media_stream_constraints={"audio": True, "video": False},
+            audio_frame_callback=AudioProcessor().recv,
+            async_processing=False,
+            rtc_configuration={
+                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}],
+            },
+        )
+        
+        if ctx.state.playing:
+            st.success("🎤 WebRTC audio is active (loopback mode)")
+        else:
+            st.info("Click Start above to activate mic loopback")
 
     def _render_current_email():
         email = st.session_state.email_manager.get_current_email()
