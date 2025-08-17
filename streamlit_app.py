@@ -72,9 +72,9 @@ def main() -> None:
                 
             def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
                 self.frame_count += 1
-                # Log first few frames and then every 100
+                # Log periodically
                 if self.frame_count <= 10 or self.frame_count % 100 == 0:
-                    logger.info(f"[WebRTC] Processing frame {self.frame_count}, samples: {frame.samples}, rate: {frame.sample_rate}, bridge_closed: {self.bridge.closed()}")
+                    logger.info(f"[WebRTC] Processing frame {self.frame_count}, bridge_closed: {self.bridge.closed()}")
                 
                 # Send mic audio to bridge (for Gemini)
                 try:
@@ -91,30 +91,18 @@ def main() -> None:
                         num_channels=len(frame.layout.channels)
                     )
                 except Exception as e:
-                    if self.frame_count == 1:
-                        print(f"[WebRTC] Error processing audio: {e}")
+                    if self.frame_count <= 10:
+                        logger.error(f"[WebRTC] Error processing audio: {e}")
                 
                 # Try to get AI audio from bridge
-                # Accumulate multiple chunks if available to prevent queue backup
-                ai_chunks = []
-                max_chunks = 5  # Process up to 5 chunks per frame
-                for _ in range(max_chunks):
-                    ai_pcm = self.bridge.get_ai_audio(timeout_seconds=0.001)  # Very short timeout
-                    if ai_pcm:
-                        ai_chunks.append(ai_pcm)
-                        if self.frame_count <= 10:
-                            logger.info(f"[WebRTC] Got AI audio chunk {len(ai_pcm)} bytes in frame {self.frame_count}")
-                    else:
-                        break
+                ai_pcm = self.bridge.get_ai_audio(timeout_seconds=0.001)  # Very short timeout
                 
-                if ai_chunks:
-                    # Combine all chunks
-                    combined_pcm = b''.join(ai_chunks)
+                if ai_pcm:
                     if self.frame_count <= 20 or self.frame_count % 100 == 0:
-                        print(f"[WebRTC] Playing AI audio: {len(combined_pcm)} bytes to browser ({len(ai_chunks)} chunks)")
+                        logger.info(f"[WebRTC] Playing AI audio: {len(ai_pcm)} bytes to browser")
                     
                     # Convert PCM bytes back to audio frame
-                    ai_array = np.frombuffer(combined_pcm, dtype=np.int16)
+                    ai_array = np.frombuffer(ai_pcm, dtype=np.int16)
                     # Create new frame with AI audio
                     new_frame = av.AudioFrame.from_ndarray(
                         ai_array.reshape(-1, 1),  # Mono
@@ -123,15 +111,12 @@ def main() -> None:
                     )
                     new_frame.sample_rate = 48000  # Browser expects 48 kHz
                     return new_frame
-                elif self.frame_count <= 5:
-                    # Debug: Check if bridge has audio in early frames
-                    print(f"[WebRTC] No AI audio available in frame {self.frame_count}")
-                
-                # Return silence instead of echo
-                silence = np.zeros((frame.samples, 1), dtype=np.int16)
-                silent_frame = av.AudioFrame.from_ndarray(silence, format='s16', layout='mono')
-                silent_frame.sample_rate = frame.sample_rate
-                return silent_frame
+                else:
+                    # Return silence instead of echo
+                    silence = np.zeros((frame.samples, 1), dtype=np.int16)
+                    silent_frame = av.AudioFrame.from_ndarray(silence, format='s16', layout='mono')
+                    silent_frame.sample_rate = frame.sample_rate
+                    return silent_frame
         
         # Capture bridge reference to avoid session_state access in background thread
         bridge_ref = st.session_state.bridge
@@ -157,12 +142,15 @@ def main() -> None:
         
         if ctx and ctx.state.playing:
             st.success("🎤 WebRTC audio is active (connected to bridge)")
+            logger.info(f"[WebRTC] Stream is playing, state: {ctx.state}")
             # Ensure bridge is started when WebRTC is active
             if st.session_state.bridge.closed():
                 st.session_state.bridge.start()
-                print("Bridge started for WebRTC audio")
+                logger.info("Bridge started for WebRTC audio")
         else:
             st.info("Click Start above to activate browser audio")
+            if ctx:
+                logger.info(f"[WebRTC] Stream state: {ctx.state}")
 
     def _render_current_email():
         email = st.session_state.email_manager.get_current_email()
@@ -292,6 +280,7 @@ def main() -> None:
         asyncio.run_coroutine_threadsafe(_stop_async(), st.session_state.loop)
 
     if start_clicked:
+        status.info("🔄 Initializing... Please wait...")
         _start()
         st.rerun()
     if stop_clicked:
@@ -302,9 +291,9 @@ def main() -> None:
     
     # Show status based on session state
     if st.session_state.initialized and st.session_state.email_manager.emails:
-        status.success(f"✅ Ready. {len(st.session_state.email_manager.emails)} emails loaded.")
+        status.success(f"✅ Ready. {len(st.session_state.email_manager.emails)} emails loaded. Voice session active.")
     elif st.session_state.runner_task:
-        status.info("🔄 Processing emails...")
+        status.info("🔄 Processing emails via voice...")
     else:
         status.info("Click Start to begin")
 
