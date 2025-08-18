@@ -138,10 +138,6 @@ class WebRTCAudioBridge(AudioBridge):
         if self._closed:
             return
             
-        # Debug: log when AI audio is received
-        if len(frame_bytes) > 0:
-            print(f"[Bridge] Received AI audio: {len(frame_bytes)} bytes at {sample_rate_hz} Hz (queue size: {self._ai_audio_queue.qsize()})")
-            
         try:
             # Convert to float32 for resampling
             audio = np.frombuffer(frame_bytes, dtype=np.int16).astype(np.float32) / 32767.0
@@ -163,7 +159,7 @@ class WebRTCAudioBridge(AudioBridge):
             try:
                 self._ai_audio_queue.put_nowait(pcm16)
             except queue.Full:
-                print(f"[Bridge] WARNING: AI audio queue full, dropping {len(pcm16)} bytes")
+                pass  # Drop if full
                 
         except Exception as e:
             print(f"⚠️ WebRTC bridge put_ai_audio error: {e}")
@@ -173,10 +169,7 @@ class WebRTCAudioBridge(AudioBridge):
         if self._closed:
             return None
         try:
-            audio = self._ai_audio_queue.get(timeout=timeout_seconds)
-            if audio:
-                print(f"[Bridge] Delivering {len(audio)} bytes to WebRTC")
-            return audio
+            return self._ai_audio_queue.get(timeout=timeout_seconds)
         except queue.Empty:
             return None
 

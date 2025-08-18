@@ -117,26 +117,22 @@ Browser-based mic/speaker UI (Streamlit) that keeps the current Gemini Live + MC
 - Deliverable: Streamlit Start creates `WebRTCAudioBridge` and spawns the per-email Gemini session using it.
 - Acceptance: The app speaks sender/subject through the browser; Stop halts cleanly.
 
-8) Fix WebRTC audio callback execution
-- Deliverable: Ensure WebRTC `recv()` callback fires continuously when stream is active, enabling bidirectional audio flow.
-- Acceptance: Terminal shows "[WebRTC] Processing frame" messages and "[WebRTC] Playing AI audio" when Gemini speaks through browser.
-
-9) Tool-call path and "next" workflow (voice only)
+8) Tool-call path and “next” workflow (voice only)
 - Deliverable: Confirm Gmail MCP tool execution and the `complete_current_email` advance logic (no Next button, voice only).
-- Acceptance: Saying "archive" or "next" advances; emails decrement until exhausted.
+- Acceptance: Saying “archive” or “next” advances; emails decrement until exhausted.
 
-10) Cleanup, cancellation, and rerun safety
+9) Cleanup, cancellation, and rerun safety
 - Deliverable: Robust Stop handler; mirrors `finally` cleanup from `main.py`; `st.session_state` guards prevent double-starts.
 - Acceptance: Start/Stop multiple times without orphaned tasks or audio device lock.
 
-11) Latency tuning and reliability
+10) Latency tuning and reliability
 - Deliverable: Tune chunk sizes (20–40 ms), queue sizes, and resampler to keep perceived latency <300–500 ms.
 - Acceptance: Subjective latency within target across Chrome/Safari; no buffer underruns/overflows in logs.
 
-12) Packaging and docs
+11) Packaging and docs
 - Deliverable: Add deps (`streamlit`, `streamlit-webrtc`, `av`, `numpy`, `scipy`), README run instructions, macOS notes (FFmpeg).
 - Acceptance: Fresh clone can run both terminal and Streamlit modes.
 
-13) Smoke tests for core flows
+12) Smoke tests for core flows
 - Deliverable: Quick scripts/checklists for: read, archive, delete, reply, skip; error recovery if MCP/network hiccups.
 - Acceptance: All flows pass twice in a row without restarts.
