@@ -74,33 +74,52 @@ class EmailManager:
 # System instruction for direct Gmail MCP access
 system_instruction = """You are a voice-driven Gmail assistant with full access to the Gmail API through MCP tools.
 
+## VOICE-ONLY INTERACTION MODE:
+- You are in a VOICE-ONLY session - all user input comes through speech
+- LISTEN ACTIVELY for voice commands at all times
+- Respond to any spoken words, even if unclear
+- Common voice commands include: "archive", "delete", "reply", "next", "skip", "mark as read"
+- Be tolerant of variations: "archive it", "archive this", "archive email" all mean the same thing
+
 ## PRIMARY BEHAVIOR - Single Email Focus:
 - You will be provided with information for ONE email at a time
 - For the email, announce ONLY: sender and subject
 - After reading the email, ask what the user would like to do
-- Wait for the user's command before any action
+- ACTIVELY LISTEN and respond to ANY voice input
 - Possible actions include: reply, archive, delete, mark as read/unread, or skip to next
-- **CRITICAL WORKFLOW**: After you execute ANY action on an email (using tools like gmail_modify_email, gmail_delete_email, gmail_send_email, etc.), you MUST immediately call the complete_current_email tool. This is mandatory.
-- **CRITICAL WORKFLOW**: If the user says "skip", "next", "continue", etc., immediately call the complete_current_email tool
-- Do NOT ask "what would you like to do next" after completing an email action - just call complete_current_email immediately
+- **MANDATORY TWO-STEP WORKFLOW FOR ALL EMAIL ACTIONS**:
+  1. First: Execute the requested action (gmail_modify_email, gmail_delete_email, etc.)
+  2. Second: IMMEDIATELY call complete_current_email IN THE SAME RESPONSE
+  3. Do NOT wait for user confirmation or say anything between these two tool calls
+  4. Example: If user says "archive", you must call BOTH gmail_modify_email AND complete_current_email
+- **CRITICAL**: Never execute an email action without also calling complete_current_email
+- **CRITICAL**: If the user says "skip", "next", "continue", immediately call complete_current_email
+- Do NOT ask "what would you like to do next" after completing an email action
 - This creates an efficient workflow where each email is processed and the system moves forward automatically
 - When performing actions on "this email" or "it", use the email ID that was provided with the email information
 
+## Voice Command Recognition:
+- Respond to simple commands like: "archive", "delete", "next", "skip", "reply"
+- Don't require perfect pronunciation or complete sentences
+- If you hear ANY audio input after asking what to do, interpret it as a command
+- If unclear, ask for clarification but assume the user is giving a command
+
 ## Key Behaviors:
 - Be concise but helpful in your responses
-- Confirm actions concisely
-- When the user says "next", "skip", or "continue", simply acknowledge and call end_session
+- When executing email actions: DO NOT speak between tool calls - just execute both tools
+- When the user says "next", "skip", or "continue", simply call complete_current_email
 - Focus only on the current email - there is no history of previous emails in this session
+- REMEMBER: Always call TWO tools together for email actions (action + complete_current_email)
 
 ## Voice Interaction:
 - Speak clearly and at a moderate pace
-- Use natural language to describe what you're doing
+- Keep responses SHORT - this is voice-only
 - Announce results concisely
 
 ## Email Reading Format:
 When provided with email info, read it as:
 "From [sender] - [subject]
-What would you like to do with this email?"
+What would you like to do?"
 
 ## Important Action Instructions:
 - **CRITICAL**: When archiving an email, you MUST use gmail_modify_email with removeLabelIds: ["INBOX"]. Do NOT add labels like "ARCHIVED". Archiving means removing from the inbox.
@@ -204,7 +223,7 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
     
     # Configuration for Gemini with all discovered MCP tools
     config = {
-        "response_modalities": ["AUDIO"],
+        "response_modalities": ["AUDIO"],  # Audio-only for voice interaction
         "tools": gemini_tools,
         "system_instruction": [system_instruction]
     }
@@ -238,6 +257,12 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                                     # Log every 20th chunk to confirm audio is flowing
                                     if audio_sent_count % 20 == 0:
                                         print(f"🎙️ Mic audio flowing: sent {audio_sent_count} chunks to Gemini")
+                                    # Also check audio level to ensure it's not silent
+                                    if audio_sent_count % 50 == 0:
+                                        import numpy as np
+                                        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                                        max_amplitude = np.max(np.abs(audio_array))
+                                        print(f"📊 Audio level: max amplitude = {max_amplitude} (out of 32768)")
                             except Exception as e:
                                 print(f"⚠️ Audio streaming error: {e}")
                                 await send_error_message(session, f"Audio streaming issue: {str(e)}")
@@ -265,6 +290,10 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                                         except Exception:
                                             pass
                                     
+                                    # Handle text responses (could be transcriptions or text replies)
+                                    if response.text:
+                                        print(f"💬 Gemini says: {response.text}")
+                                    
                                     # Handle audio data
                                     elif response.data is not None:
                                         # Decode Gemini audio to PCM16 (handles base64/container/raw) and play
@@ -274,6 +303,10 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                                     # Handle tool calls
                                     elif response.tool_call:
                                         function_responses = []
+                                        
+                                        # Log all tools being called in this batch
+                                        tool_names = [fc.name for fc in response.tool_call.function_calls]
+                                        print(f"🔧 Tool batch: {tool_names}")
                                         
                                         for fc in response.tool_call.function_calls:
                                             try:
@@ -308,6 +341,10 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                                                     else:
                                                         response_content["result"] = "Tool executed successfully"
                                                     
+                                                    # Add reminder for email actions to call complete_current_email
+                                                    if fc.name in ["gmail_modify_email", "gmail_delete_email", "gmail_send_email"]:
+                                                        response_content["reminder"] = "Now call complete_current_email to advance to the next email"
+                                                    
                                                     # Create function response
                                                     function_response = types.FunctionResponse(
                                                         id=fc.id,
@@ -327,6 +364,14 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                                         
                                         # Send tool responses
                                         await session.send_tool_response(function_responses=function_responses)
+                                        
+                                        # If we just executed an email action without complete_current_email, remind Gemini
+                                        if any(name in ["gmail_modify_email", "gmail_delete_email", "gmail_send_email"] for name in tool_names):
+                                            if "complete_current_email" not in tool_names:
+                                                print("⚠️ Email action executed without complete_current_email - sending reminder")
+                                                await session.send_realtime_input(
+                                                    text="Please call complete_current_email now to advance to the next email."
+                                                )
                                         
                                         # Check if session should end after tool execution
                                         if nav_tools.should_end_session():

@@ -67,8 +67,9 @@ def main() -> None:
                 try:
                     self.frame_count += 1
                     
-                    # Send mic audio to Gemini (every 3rd frame for better voice capture)
-                    if self.frame_count % 3 == 0:
+                    # Send mic audio to Gemini (EVERY frame for continuous voice capture)
+                    # This ensures we don't miss any speech
+                    if True:  # Process every frame
                         try:
                             # Get mic audio from frame
                             mic_data = frame.to_ndarray()
@@ -88,13 +89,23 @@ def main() -> None:
                             
                             # Only process if we have reasonable audio
                             if len(mic_data) >= 480:  # At least 10ms at 48kHz
+                                # Check audio level BEFORE processing
+                                max_amplitude = np.max(np.abs(mic_data))
+                                
+                                # Log audio level periodically
+                                if self.frame_count % 90 == 0:  # Every ~1.8 seconds at 50fps / 3
+                                    print(f"🎤 Mic input level: max amplitude = {max_amplitude:.6f}")
+                                
+                                # AMPLIFY the mic audio significantly (20x) since levels are too low
+                                mic_data = mic_data * 20.0
+                                
                                 # Convert to int16
                                 if mic_data.dtype != np.int16:
-                                    mic_data = (mic_data * 32767).astype(np.int16)
+                                    mic_data = np.clip(mic_data * 32767, -32768, 32767).astype(np.int16)
                                 
                                 # Debug: Log occasionally to confirm mic is working
                                 if self.frame_count % 300 == 0:  # Every ~6 seconds at 50fps
-                                    print(f"🎙️ Mic active: sending {len(mic_data)} samples to bridge")
+                                    print(f"🎙️ Mic active: sending {len(mic_data)} samples to bridge (amplified 20x)")
                                 
                                 # Send to bridge (will be downsampled to 16kHz internally)
                                 self.bridge.put_user_audio(

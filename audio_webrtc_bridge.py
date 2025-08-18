@@ -99,17 +99,18 @@ class WebRTCAudioBridge(AudioBridge):
             # Resample to 16 kHz for Gemini if needed
             if sample_rate_hz != self.USER_INPUT_SPEC.sample_rate_hz and len(audio) > 10:
                 # Only resample if we have enough samples
+                # Use kaiser_best for better quality (important for voice recognition)
                 audio = librosa.resample(
                     audio, 
                     orig_sr=sample_rate_hz, 
                     target_sr=self.USER_INPUT_SPEC.sample_rate_hz,
-                    res_type="kaiser_fast"
+                    res_type="kaiser_best"  # Higher quality resampling for voice
                 )
             elif len(audio) <= 10:
                 # Skip tiny audio chunks
                 return
             
-            # Convert back to int16 PCM
+            # Convert back to int16 PCM with clipping
             audio = np.clip(audio, -1.0, 1.0)
             pcm16 = (audio * 32767.0).astype(np.int16).tobytes()
             
@@ -161,7 +162,7 @@ class WebRTCAudioBridge(AudioBridge):
                     res_type="kaiser_fast"
                 )
             
-            # Convert back to int16 PCM
+            # Convert back to int16 PCM with clipping
             audio = np.clip(audio, -1.0, 1.0)
             pcm16 = (audio * 32767.0).astype(np.int16).tobytes()
             
