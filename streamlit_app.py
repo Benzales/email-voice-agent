@@ -2,8 +2,8 @@ import asyncio
 import contextlib
 import threading
 from typing import Optional
-import numpy as np
 
+import numpy as np
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase, WebRtcStreamerContext
 import av
@@ -38,58 +38,163 @@ def main() -> None:
         st.session_state.loop = get_event_loop()
         st.session_state.bridge = WebRTCAudioBridge()
         st.session_state.session_active = False
+    
+    # Instructions
+    st.info("📖 **How to use:** 1️⃣ Enable audio below, 2️⃣ Click Start to begin email triage")
 
     # Controls
     col1, col2 = st.columns(2)
-    start_clicked = col1.button("Start", type="primary", disabled=st.session_state.runner_task is not None)
+    start_clicked = col1.button("Start Email Triage", type="primary", disabled=st.session_state.runner_task is not None)
     stop_clicked = col2.button("Stop", disabled=st.session_state.runner_task is None)
 
     status = st.empty()
     current_email_box = st.empty()
 
     # WebRTC audio with Gemini bridge (Phase 7)
-    with st.expander("Audio (browser)", expanded=True):
-        st.caption("Phase 7: Browser audio connected to Gemini via bridge. Click Start below to activate.")
+    with st.expander("🎤 Audio Controls (REQUIRED)", expanded=True):
+        st.warning("⚠️ You MUST click the START button below to hear the agent!")
         
         # Audio processor that connects to the bridge
         class BridgeAudioProcessor(AudioProcessorBase):
             def __init__(self, bridge: WebRTCAudioBridge):
                 self.bridge = bridge
+                self.frame_count = 0
+                self.audio_buffer = np.array([], dtype=np.int16)  # Buffer for leftover audio
+                print(f"🎧 BridgeAudioProcessor initialized with bridge at {id(bridge)}, closed: {bridge.closed()}")
                 
             def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
-                # Send mic audio to bridge (for Gemini)
-                audio_array = frame.to_ndarray()
-                # Convert to int16 PCM
-                if audio_array.dtype != np.int16:
-                    audio_array = (audio_array * 32767).astype(np.int16)
-                pcm_bytes = audio_array.tobytes()
-                
-                # Put user audio (browser is typically 48 kHz)
-                self.bridge.put_user_audio(
-                    pcm_bytes,
-                    sample_rate_hz=frame.sample_rate,
-                    num_channels=len(frame.layout.channels)
-                )
-                
-                # Get AI audio from bridge (if available)
-                ai_pcm = self.bridge.get_ai_audio(timeout_seconds=0.001)
-                if ai_pcm:
-                    # Convert PCM bytes back to audio frame
-                    ai_array = np.frombuffer(ai_pcm, dtype=np.int16)
-                    # Create new frame with AI audio
-                    new_frame = av.AudioFrame.from_ndarray(
-                        ai_array.reshape(-1, 1),  # Mono
-                        format='s16',
-                        layout='mono'
-                    )
-                    new_frame.sample_rate = 48000  # Browser expects 48 kHz
-                    return new_frame
-                
-                # Return silence if no AI audio
-                silence = np.zeros((frame.samples, 1), dtype=np.int16)
-                silent_frame = av.AudioFrame.from_ndarray(silence, format='s16', layout='mono')
-                silent_frame.sample_rate = frame.sample_rate
-                return silent_frame
+                """Process audio frame: send mic to Gemini, return AI audio to speaker"""
+                try:
+                    self.frame_count += 1
+                    
+                    # Send mic audio to Gemini (every 3rd frame for better voice capture)
+                    if self.frame_count % 3 == 0:
+                        try:
+                            # Get mic audio from frame
+                            mic_data = frame.to_ndarray()
+                            
+                            # Handle different array shapes
+                            if len(mic_data.shape) == 2:
+                                # If stereo (shape: [channels, samples]), average channels
+                                if mic_data.shape[0] == 2:  # Stereo with channels first
+                                    mic_data = mic_data.mean(axis=0)
+                                elif mic_data.shape[1] == 2:  # Stereo with channels last
+                                    mic_data = mic_data.mean(axis=1)
+                                else:
+                                    mic_data = mic_data.flatten()
+                            
+                            # Flatten to ensure 1D array
+                            mic_data = mic_data.flatten()
+                            
+                            # Only process if we have reasonable audio
+                            if len(mic_data) >= 480:  # At least 10ms at 48kHz
+                                # Convert to int16
+                                if mic_data.dtype != np.int16:
+                                    mic_data = (mic_data * 32767).astype(np.int16)
+                                
+                                # Debug: Log occasionally to confirm mic is working
+                                if self.frame_count % 300 == 0:  # Every ~6 seconds at 50fps
+                                    print(f"🎙️ Mic active: sending {len(mic_data)} samples to bridge")
+                                
+                                # Send to bridge (will be downsampled to 16kHz internally)
+                                self.bridge.put_user_audio(
+                                    mic_data.tobytes(),
+                                    sample_rate_hz=frame.sample_rate,
+                                    num_channels=1
+                                )
+                        except Exception as e:
+                            if self.frame_count % 100 == 0:
+                                print(f"⚠️ Mic processing error: {e}")
+                    
+                    # Debug logging
+                    if self.frame_count % 100 == 0:
+                        if hasattr(self.bridge, '_ai_audio_queue'):
+                            queue_size = self.bridge._ai_audio_queue.qsize()
+                            buffer_size = len(self.audio_buffer)
+                            print(f"📡 Frame {self.frame_count}: Queue={queue_size} chunks, Buffer={buffer_size} samples")
+                    
+                    # First check if we have buffered audio to play
+                    if len(self.audio_buffer) >= frame.samples:
+                        # Use buffered audio
+                        output_samples = self.audio_buffer[:frame.samples]
+                        self.audio_buffer = self.audio_buffer[frame.samples:]  # Keep remainder
+                        
+                        # Log playing audio occasionally for debugging
+                        if self.frame_count % 500 == 0:  # Much less frequent
+                            max_val = np.max(np.abs(output_samples))
+                            print(f"🔊 Audio flowing: buffer={len(self.audio_buffer)} samples")
+                        
+                        # Try using int16 format directly (more compatible)
+                        # Amplify the audio first
+                        output_samples = (output_samples.astype(np.float32) * 1.5).astype(np.int16)
+                        output_samples = np.clip(output_samples, -32768, 32767)
+                        
+                        # Create frame using int16 format
+                        # For PyAV, we need shape (channels, samples)
+                        output_data = output_samples.reshape(1, -1)
+                        
+                        out_frame = av.AudioFrame.from_ndarray(output_data, format='s16', layout='mono')
+                        out_frame.sample_rate = 48000  # Explicitly set to 48kHz
+                        return out_frame
+                    
+                    # If buffer is low, try to get more audio from queue
+                    if hasattr(self.bridge, '_ai_audio_queue') and not self.bridge._ai_audio_queue.empty():
+                        try:
+                            # Get new audio chunk
+                            ai_pcm = self.bridge._ai_audio_queue.get_nowait()
+                            new_samples = np.frombuffer(ai_pcm, dtype=np.int16)
+                            
+                            # Add to buffer
+                            self.audio_buffer = np.concatenate([self.audio_buffer, new_samples])
+                            
+                            # Now try to return audio if we have enough
+                            if len(self.audio_buffer) >= frame.samples:
+                                output_samples = self.audio_buffer[:frame.samples]
+                                self.audio_buffer = self.audio_buffer[frame.samples:]
+                                
+                                # Amplify and use int16 format
+                                output_samples = (output_samples.astype(np.float32) * 1.5).astype(np.int16)
+                                output_samples = np.clip(output_samples, -32768, 32767)
+                                output_data = output_samples.reshape(1, -1)
+                                
+                                out_frame = av.AudioFrame.from_ndarray(output_data, format='s16', layout='mono')
+                                out_frame.sample_rate = 48000
+                                return out_frame
+                                
+                        except Exception as e:
+                            if self.frame_count % 100 == 0:
+                                print(f"⚠️ Error getting audio: {e}")
+                    
+                    # If we have partial buffer but not enough for full frame, pad with silence
+                    if len(self.audio_buffer) > 0 and len(self.audio_buffer) < frame.samples:
+                        padding = np.zeros(frame.samples - len(self.audio_buffer), dtype=np.int16)
+                        output_samples = np.concatenate([self.audio_buffer, padding])
+                        self.audio_buffer = np.array([], dtype=np.int16)  # Clear buffer
+                        
+                        # Amplify and use int16 format
+                        output_samples = (output_samples.astype(np.float32) * 1.5).astype(np.int16)
+                        output_samples = np.clip(output_samples, -32768, 32767)
+                        output_data = output_samples.reshape(1, -1)
+                        
+                        out_frame = av.AudioFrame.from_ndarray(output_data, format='s16', layout='mono')
+                        out_frame.sample_rate = 48000
+                        return out_frame
+                    
+                    # Return silence if no audio available
+                    silence = np.zeros((1, frame.samples), dtype=np.int16)
+                    silent_frame = av.AudioFrame.from_ndarray(silence, format='s16', layout='mono')
+                    silent_frame.sample_rate = 48000
+                    return silent_frame
+                    
+                except Exception as e:
+                    print(f"❌ Fatal error in recv: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Return silence as fallback
+                    silence = np.zeros((1, frame.samples), dtype=np.int16)
+                    silent_frame = av.AudioFrame.from_ndarray(silence, format='s16', layout='mono')
+                    silent_frame.sample_rate = 48000
+                    return silent_frame
         
         # Capture bridge reference to avoid session_state access in background thread
         bridge_ref = st.session_state.bridge
@@ -97,7 +202,14 @@ def main() -> None:
         ctx = webrtc_streamer(
             key="voice-bridge",
             mode=WebRtcMode.SENDRECV,
-            media_stream_constraints={"audio": True, "video": False},
+            media_stream_constraints={
+                "audio": {
+                    "echoCancellation": False,
+                    "noiseSuppression": False,
+                    "autoGainControl": False,
+                },
+                "video": False
+            },
             audio_processor_factory=lambda: BridgeAudioProcessor(bridge_ref),
             async_processing=False,
             rtc_configuration={
@@ -106,11 +218,18 @@ def main() -> None:
         )
         
         if ctx and ctx.state.playing:
-            st.success("🎤 WebRTC audio is active (connected to bridge)")
-            if not st.session_state.bridge.closed():
+            st.success("✅ Audio is ACTIVE - You should hear the agent now!")
+            # Ensure bridge is started when WebRTC is active
+            if st.session_state.bridge.closed():
                 st.session_state.bridge.start()
+                print("🔗 Started WebRTC audio bridge")
+            
+            # Check if there's audio waiting in the queue
+            queue_size = st.session_state.bridge._ai_audio_queue.qsize() if hasattr(st.session_state.bridge, '_ai_audio_queue') else 0
+            if queue_size > 0:
+                st.info(f"📦 {queue_size} audio chunks waiting to play...")
         else:
-            st.info("Click Start above to activate browser audio")
+            st.error("❌ Audio is NOT active - Click START above to hear the agent!")
 
     def _render_current_email():
         email = st.session_state.email_manager.get_current_email()
@@ -156,7 +275,14 @@ def main() -> None:
     async def _runner(email_manager, nav_tools, gmail_agent, gemini_tools, bridge):
         # Process emails using the WebRTC bridge
         try:
-            bridge.start()
+            # Ensure bridge is started
+            if bridge.closed():
+                bridge.start()
+                print("🚀 Started bridge for runner")
+            print(f"🎯 Runner started, bridge closed: {bridge.closed()}")
+            
+            # Wait a moment for WebRTC to initialize
+            await asyncio.sleep(2)
             
             while not email_manager.is_exhausted():
                 # Process one email with WebRTC bridge

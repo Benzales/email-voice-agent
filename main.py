@@ -226,6 +226,7 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                     # Audio streaming task
                     async def stream_audio():
                         """Continuously stream audio data to Gemini without interruption"""
+                        audio_sent_count = 0
                         while not nav_tools.should_end_session():
                             try:
                                 audio_data = bridge.get_user_audio()
@@ -233,6 +234,10 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                                     await session.send_realtime_input(
                                         audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
                                     )
+                                    audio_sent_count += 1
+                                    # Log every 20th chunk to confirm audio is flowing
+                                    if audio_sent_count % 20 == 0:
+                                        print(f"🎙️ Mic audio flowing: sent {audio_sent_count} chunks to Gemini")
                             except Exception as e:
                                 print(f"⚠️ Audio streaming error: {e}")
                                 await send_error_message(session, f"Audio streaming issue: {str(e)}")

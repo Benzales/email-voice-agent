@@ -97,13 +97,17 @@ class WebRTCAudioBridge(AudioBridge):
                 audio = audio.reshape(-1, 2).mean(axis=1)
             
             # Resample to 16 kHz for Gemini if needed
-            if sample_rate_hz != self.USER_INPUT_SPEC.sample_rate_hz and len(audio) > 0:
+            if sample_rate_hz != self.USER_INPUT_SPEC.sample_rate_hz and len(audio) > 10:
+                # Only resample if we have enough samples
                 audio = librosa.resample(
                     audio, 
                     orig_sr=sample_rate_hz, 
                     target_sr=self.USER_INPUT_SPEC.sample_rate_hz,
                     res_type="kaiser_fast"
                 )
+            elif len(audio) <= 10:
+                # Skip tiny audio chunks
+                return
             
             # Convert back to int16 PCM
             audio = np.clip(audio, -1.0, 1.0)
@@ -116,14 +120,20 @@ class WebRTCAudioBridge(AudioBridge):
                 pass  # Drop frame if queue is full
                 
         except Exception as e:
-            print(f"⚠️ WebRTC bridge put_user_audio error: {e}")
+            pass  # Silently ignore to avoid spam
 
     def get_user_audio(self, timeout_seconds: float = 0.05) -> Optional[bytes]:
         """Retrieve queued user audio for Gemini (16 kHz PCM16)."""
         if self._closed:
             return None
         try:
-            return self._user_audio_queue.get(timeout=timeout_seconds)
+            audio = self._user_audio_queue.get(timeout=timeout_seconds)
+            if audio:
+                # Log more frequently to debug mic audio flow
+                import random
+                if random.random() < 0.05:  # 5% chance to log
+                    print(f"🎤 Sending {len(audio)} bytes of user audio to Gemini")
+            return audio
         except queue.Empty:
             return None
 
@@ -169,7 +179,8 @@ class WebRTCAudioBridge(AudioBridge):
         if self._closed:
             return None
         try:
-            return self._ai_audio_queue.get(timeout=timeout_seconds)
+            audio = self._ai_audio_queue.get(timeout=timeout_seconds)
+            return audio
         except queue.Empty:
             return None
 
