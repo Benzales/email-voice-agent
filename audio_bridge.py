@@ -7,7 +7,6 @@ import asyncio
 import json
 from typing import Optional, Dict, Any
 from google.genai import types
-import websockets
 
 
 class WebSocketAudioBridge:
@@ -33,104 +32,61 @@ class WebSocketAudioBridge:
             return
         
         self.is_streaming = True
-        
-        # Start audio streaming tasks
-        input_task = asyncio.create_task(
-            self._stream_audio_to_gemini(gemini_session, nav_tools)
-        )
-        output_task = asyncio.create_task(
-            self._stream_audio_from_gemini(gemini_session, nav_tools)
-        )
-        
-        self.audio_tasks = [input_task, output_task]
-        
         print("🎵 Started WebSocket ↔ Gemini audio streaming")
-    
-    async def _stream_audio_to_gemini(self, gemini_session, nav_tools):
-        """
-        Stream audio from WebSocket to Gemini Live
-        Replaces the audio streaming logic from main.py lines 153-166
-        """
-        try:
-            while self.is_streaming and not nav_tools.should_end_session():
-                try:
-                    # Wait for audio data from WebSocket
-                    message = await asyncio.wait_for(self.websocket.recv(), timeout=0.005)
-                    
-                    # Handle different message types
-                    if isinstance(message, bytes):
-                        # Raw audio data - send directly to Gemini
-                        await gemini_session.send_realtime_input(
-                            audio=types.Blob(data=message, mime_type="audio/pcm;rate=16000")
-                        )
-                    elif isinstance(message, str):
-                        # JSON message - handle control signals
-                        try:
-                            data = json.loads(message)
-                            if data.get("type") == "audio_chunk":
-                                # Audio data in JSON format
-                                audio_data = data.get("data")
-                                if audio_data:
-                                    await gemini_session.send_realtime_input(
-                                        audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
-                                    )
-                            elif data.get("type") == "stop_session":
-                                print("🛑 Received stop signal from frontend")
-                                nav_tools.end_session()
-                                break
-                        except json.JSONDecodeError:
-                            # Not JSON, ignore
-                            pass
-                
-                except asyncio.TimeoutError:
-                    # No audio data received, continue
-                    continue
-                except websockets.exceptions.ConnectionClosed:
-                    print("🔌 WebSocket connection closed during audio input")
-                    break
-                except Exception as e:
-                    print(f"⚠️ Audio input streaming error: {e}")
-                    await self._send_error_to_frontend(f"Audio input error: {str(e)}")
-                
-                await asyncio.sleep(0.005)  # Match main.py timing
         
-        except Exception as e:
-            print(f"❌ Fatal error in audio input stream: {e}")
+        # Note: Audio streaming will be handled in the main session loop
+        # This method just sets the flag and prepares the bridge
     
-    async def _stream_audio_from_gemini(self, gemini_session, nav_tools):
+    async def handle_websocket_message(self, message, gemini_session):
         """
-        Stream audio from Gemini Live to WebSocket
-        Replaces the audio output logic from main.py lines 186-188
+        Handle incoming WebSocket message and forward audio to Gemini
         """
         try:
-            async for response in gemini_session.receive():
-                if not self.is_streaming or nav_tools.should_end_session():
-                    break
-                
-                try:
-                    # Handle interruptions
-                    if response.server_content and response.server_content.interrupted is True:
-                        print("\n🔄 Interrupted")
-                        await self.websocket.send(json.dumps({"type": "audio_interrupted"}))
-                    
-                    # Handle audio data - send to WebSocket
-                    elif response.data is not None:
-                        await self.websocket.send(response.data)  # Send raw bytes
-                    
-                    # Handle other response types (handled elsewhere)
-                    elif response.tool_call:
-                        # Tool calls are handled by the main session processor
+            if message["type"] == "websocket.receive":
+                if "bytes" in message:
+                    # Raw audio data - send directly to Gemini
+                    audio_data = message["bytes"]
+                    await gemini_session.send_realtime_input(
+                        audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
+                    )
+                elif "text" in message:
+                    # JSON message - handle control signals
+                    try:
+                        data = json.loads(message["text"])
+                        if data.get("type") == "stop_session":
+                            print("🛑 Received stop signal from frontend")
+                            return "stop_session"
+                    except json.JSONDecodeError:
+                        # Not JSON, ignore
                         pass
-                        
-                except websockets.exceptions.ConnectionClosed:
-                    print("🔌 WebSocket connection closed during audio output")
-                    break
-                except Exception as e:
-                    print(f"⚠️ Audio output streaming error: {e}")
-                    await self._send_error_to_frontend(f"Audio output error: {str(e)}")
-        
         except Exception as e:
-            print(f"❌ Fatal error in audio output stream: {e}")
+            print(f"⚠️ Error handling WebSocket message: {e}")
+        
+        return None
+    
+    async def handle_gemini_response(self, response):
+        """
+        Handle Gemini response and forward audio to WebSocket
+        """
+        try:
+            # Handle interruptions
+            if response.server_content and response.server_content.interrupted is True:
+                print("\n🔄 Interrupted")
+                await self.websocket.send_text(json.dumps({"type": "audio_interrupted"}))
+            
+            # Handle audio data - send to WebSocket
+            elif response.data is not None:
+                await self.websocket.send_bytes(response.data)  # Send raw bytes
+            
+            # Tool calls are handled elsewhere
+            elif response.tool_call:
+                return response.tool_call
+                
+        except Exception as e:
+            print(f"⚠️ Error handling Gemini response: {e}")
+            await self._send_error_to_frontend(f"Audio output error: {str(e)}")
+        
+        return None
     
     async def stop_streaming(self):
         """Stop all audio streaming tasks"""
@@ -160,7 +116,7 @@ class WebSocketAudioBridge:
     async def _send_error_to_frontend(self, error_message: str):
         """Send error message to frontend via WebSocket"""
         try:
-            await self.websocket.send(json.dumps({
+            await self.websocket.send_text(json.dumps({
                 "type": "error",
                 "message": error_message,
                 "recoverable": True
@@ -205,65 +161,72 @@ async def create_gemini_session_with_websocket(gemini_session_config: Dict[str, 
                         text=f"Please read me this email and ask what I'd like to do with it. The email is: {email_info['display_text']} [Current email ID: {email_info['id']}]."
                     )
                     
-                    # Start audio streaming and response processing
+                    # Start audio streaming
                     await audio_bridge.start_streaming(session, nav_tools)
                     
-                    # Main response processing loop (similar to main.py lines 176-258)
-                    while not nav_tools.should_end_session():
+                    # Create tasks for handling WebSocket messages and Gemini responses
+                    async def handle_websocket_messages():
+                        """Handle incoming WebSocket messages"""
+                        while not nav_tools.should_end_session():
+                            try:
+                                message = await asyncio.wait_for(websocket.receive(), timeout=0.1)
+                                result = await audio_bridge.handle_websocket_message(message, session)
+                                if result == "stop_session":
+                                    nav_tools.end_session()
+                                    break
+                            except asyncio.TimeoutError:
+                                continue
+                            except Exception as e:
+                                print(f"⚠️ WebSocket message error: {e}")
+                                break
+                    
+                    async def handle_gemini_responses():
+                        """Handle Gemini Live responses"""
                         try:
                             async for response in session.receive():
-                                try:
-                                    # Handle interruptions
-                                    if response.server_content and response.server_content.interrupted is True:
-                                        print("\n🔄 Interrupted")
-                                        await websocket.send_text(json.dumps({"type": "audio_interrupted"}))
-                                    
-                                    # Handle audio data - handled by audio bridge
-                                    elif response.data is not None:
-                                        # Audio streaming is handled by the audio bridge
-                                        pass
-                                    
-                                    # Handle tool calls
-                                    elif response.tool_call:
-                                        function_responses = []
-                                        
-                                        for fc in response.tool_call.function_calls:
-                                            function_response = await handle_tool_execution(
-                                                email_info.get('gmail_agent'), fc, nav_tools
-                                            )
-                                            function_responses.append(function_response)
-                                        
-                                        # Send tool responses back to Gemini
-                                        await session.send_tool_response(function_responses=function_responses)
-                                        
-                                        # Check if session should end after tool execution
-                                        if nav_tools.should_end_session():
-                                            break
-                                            
-                                except Exception as response_error:
-                                    print(f"⚠️ Error processing response: {response_error}")
-                                    await websocket.send_text(json.dumps({
-                                        "type": "error",
-                                        "message": f"Response processing error: {str(response_error)}",
-                                        "recoverable": True
-                                    }))
-                                
-                                # Break if session should end
                                 if nav_tools.should_end_session():
                                     break
-                            
-                            await asyncio.sleep(0.005)
-                            
-                        except asyncio.CancelledError:
-                            raise
+                                
+                                # Let audio bridge handle audio responses
+                                tool_call = await audio_bridge.handle_gemini_response(response)
+                                
+                                # Handle tool calls
+                                if tool_call:
+                                    function_responses = []
+                                    
+                                    for fc in tool_call.function_calls:
+                                        function_response = await handle_tool_execution(
+                                            email_info.get('gmail_agent'), fc, nav_tools
+                                        )
+                                        function_responses.append(function_response)
+                                    
+                                    # Send tool responses back to Gemini
+                                    await session.send_tool_response(function_responses=function_responses)
+                                    
+                                    # Check if session should end after tool execution
+                                    if nav_tools.should_end_session():
+                                        break
                         except Exception as e:
-                            print(f"⚠️ Error in processing loop: {e}")
-                            await websocket.send_text(json.dumps({
-                                "type": "error",
-                                "message": f"Processing error: {str(e)}",
-                                "recoverable": True
-                            }))
-                            await asyncio.sleep(0.005)
+                            print(f"⚠️ Gemini response error: {e}")
+                    
+                    # Run both tasks concurrently
+                    websocket_task = asyncio.create_task(handle_websocket_messages())
+                    gemini_task = asyncio.create_task(handle_gemini_responses())
+                    
+                    # Wait for either task to complete or session to end
+                    try:
+                        await asyncio.wait(
+                            [websocket_task, gemini_task],
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
+                    finally:
+                        # Cancel remaining tasks
+                        websocket_task.cancel()
+                        gemini_task.cancel()
+                        try:
+                            await asyncio.gather(websocket_task, gemini_task, return_exceptions=True)
+                        except:
+                            pass
                     
                     session_completed = True
                     
