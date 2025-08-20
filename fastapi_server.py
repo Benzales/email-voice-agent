@@ -1,0 +1,368 @@
+"""
+FastAPI server for voice-driven email agent
+Orchestrates extracted components and provides WebSocket interface for frontend
+"""
+
+import asyncio
+import json
+import time
+from typing import Dict, Any, Optional
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+# Import our extracted services
+from email_service import EmailManager, initialize_email_manager, extract_email_details
+from gemini_service import (
+    setup_mcp_connection, discover_gmail_tools, convert_mcp_to_gemini_tools,
+    create_navigation_tools, create_gemini_session_config, cleanup_mcp_resources
+)
+from audio_bridge import WebSocketAudioBridge, create_gemini_session_with_websocket
+from models import (
+    HealthCheckResponse, SessionInfoResponse, SessionConfig, SessionStatus,
+    create_error_message, create_session_status_message, parse_websocket_message,
+    MessageType
+)
+
+# Global state for the application
+class AppState:
+    def __init__(self):
+        self.mcp_app = None
+        self.gmail_agent = None
+        self.gemini_tools = []
+        self.current_session: Optional[Dict[str, Any]] = None
+        self.is_initialized = False
+        
+    def reset_session(self):
+        """Reset current session state"""
+        self.current_session = None
+
+# Global app state
+app_state = AppState()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan manager - handles startup and shutdown
+    Initializes MCP connections on startup and cleans up on shutdown
+    """
+    print("🚀 Starting Email Voice Agent FastAPI Server...")
+    
+    try:
+        # Initialize MCP and Gmail agent
+        print("📡 Initializing MCP connection...")
+        app_state.mcp_app, app_state.gmail_agent = await setup_mcp_connection()
+        
+        # Discover and convert tools
+        print("🔧 Discovering Gmail tools...")
+        mcp_tools = await discover_gmail_tools(app_state.gmail_agent)
+        app_state.gemini_tools = convert_mcp_to_gemini_tools(mcp_tools)
+        
+        app_state.is_initialized = True
+        print(f"✅ Server initialized with {len(app_state.gemini_tools)} Gmail tools")
+        
+        yield  # Server is running
+        
+    except Exception as e:
+        print(f"❌ Failed to initialize server: {e}")
+        raise
+    
+    finally:
+        # Cleanup on shutdown
+        print("🧹 Cleaning up resources...")
+        if app_state.mcp_app or app_state.gmail_agent:
+            await cleanup_mcp_resources(app_state.mcp_app, app_state.gmail_agent)
+        print("👋 Server shutdown complete")
+
+
+# Create FastAPI app with lifespan manager
+app = FastAPI(
+    title="Email Voice Agent API",
+    description="Voice-driven Gmail assistant with WebSocket audio streaming",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# Add CORS middleware for Next.js frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # Next.js development
+        "https://*.vercel.app",   # Vercel deployment
+        "https://localhost:3000", # HTTPS local development
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/", response_class=JSONResponse)
+async def root():
+    """Root endpoint with basic info"""
+    return {
+        "message": "Email Voice Agent API",
+        "status": "running",
+        "initialized": app_state.is_initialized,
+        "docs": "/docs",
+        "websocket": "/ws/voice-session"
+    }
+
+
+@app.get("/health", response_model=HealthCheckResponse)
+async def health_check():
+    """Health check endpoint for monitoring"""
+    services = {
+        "mcp": app_state.mcp_app is not None,
+        "gmail_agent": app_state.gmail_agent is not None,
+        "gemini_tools": len(app_state.gemini_tools) > 0
+    }
+    
+    return HealthCheckResponse(
+        status="healthy" if app_state.is_initialized else "initializing",
+        timestamp=time.time(),
+        services=services
+    )
+
+
+@app.get("/session/status", response_model=SessionInfoResponse)
+async def get_session_status():
+    """Get current session status"""
+    if not app_state.current_session:
+        return SessionInfoResponse(
+            active=False,
+            status=SessionStatus.COMPLETED
+        )
+    
+    return SessionInfoResponse(
+        active=True,
+        status=app_state.current_session.get("status", SessionStatus.ACTIVE),
+        current_email=app_state.current_session.get("current_email"),
+        progress=app_state.current_session.get("progress"),
+        started_at=app_state.current_session.get("started_at")
+    )
+
+
+@app.websocket("/ws/voice-session")
+async def websocket_voice_session(websocket: WebSocket):
+    """
+    Main WebSocket endpoint for voice-driven email processing
+    Handles the complete email processing workflow with audio streaming
+    """
+    await websocket.accept()
+    print("🔌 WebSocket connected")
+    
+    if not app_state.is_initialized:
+        await websocket.send_text(json.dumps(
+            create_error_message("Server not initialized", recoverable=False).dict()
+        ))
+        await websocket.close()
+        return
+    
+    email_manager = None
+    nav_tools = None
+    session_config = SessionConfig()
+    
+    try:
+        # Send initial status
+        await websocket.send_text(json.dumps(
+            create_session_status_message(SessionStatus.INITIALIZING, "Setting up email session...").dict()
+        ))
+        
+        # Initialize email manager with inbox emails
+        print("📧 Fetching inbox emails...")
+        email_manager = await initialize_email_manager(
+            app_state.gmail_agent, 
+            query=session_config.email_query,
+            max_results=session_config.max_results
+        )
+        
+        if email_manager.is_exhausted():
+            await websocket.send_text(json.dumps(
+                create_error_message("No emails found in inbox", recoverable=False).dict()
+            ))
+            await websocket.close()
+            return
+        
+        # Create navigation tools
+        nav_tools = create_navigation_tools(email_manager)
+        
+        # Add custom complete_current_email tool to gemini_tools
+        complete_current_email_tool = nav_tools.get_complete_current_email_tool()
+        gemini_tools_with_nav = app_state.gemini_tools + [complete_current_email_tool]
+        
+        # Create Gemini session configuration
+        gemini_session_config = create_gemini_session_config(gemini_tools_with_nav)
+        
+        # Initialize session state
+        app_state.current_session = {
+            "status": SessionStatus.ACTIVE,
+            "started_at": time.time(),
+            "email_manager": email_manager,
+            "nav_tools": nav_tools
+        }
+        
+        # Send session ready status
+        await websocket.send_text(json.dumps(
+            create_session_status_message(
+                SessionStatus.ACTIVE, 
+                f"Ready to process {len(email_manager.emails)} emails",
+                progress=email_manager.get_progress()
+            ).dict()
+        ))
+        
+        # Main email processing loop
+        while not email_manager.is_exhausted():
+            current_email = email_manager.get_current_email()
+            if not current_email:
+                break
+            
+            # Extract email details
+            email_info = extract_email_details(current_email)
+            email_info['nav_tools'] = nav_tools  # Pass nav_tools to session
+            email_info['gmail_agent'] = app_state.gmail_agent  # Pass gmail_agent to session
+            
+            # Update session state
+            app_state.current_session.update({
+                "current_email": email_info,
+                "progress": email_manager.get_progress()
+            })
+            
+            print(f"📧 Processing email {email_manager.current_index + 1}/{len(email_manager.emails)}: {email_info['display_text']}")
+            
+            # Send progress update
+            await websocket.send_text(json.dumps(
+                create_session_status_message(
+                    SessionStatus.PROCESSING,
+                    f"Processing: {email_info['display_text']}",
+                    progress=email_manager.get_progress()
+                ).dict()
+            ))
+            
+            # Process single email with Gemini Live + WebSocket audio
+            session_success = await process_single_email_websocket(
+                websocket, gemini_session_config, email_info, nav_tools
+            )
+            
+            if not session_success:
+                print("❌ Email session failed or was interrupted")
+                break
+            
+            # Move to next email
+            email_manager.next_email()
+            
+            # Brief pause between emails
+            if not email_manager.is_exhausted():
+                await asyncio.sleep(1)
+        
+        # All emails processed successfully
+        await websocket.send_text(json.dumps(
+            create_session_status_message(
+                SessionStatus.COMPLETED,
+                "All emails processed! 🎉",
+                progress=email_manager.get_progress()
+            ).dict()
+        ))
+        
+        print("🎉 All emails processed successfully!")
+        
+    except Exception as e:
+        print(f"❌ WebSocket session error: {e}")
+        await websocket.send_text(json.dumps(
+            create_error_message(f"Session error: {str(e)}", recoverable=False).dict()
+        ))
+    
+    finally:
+        # Reset session state
+        app_state.reset_session()
+        print("🔌 WebSocket session ended")
+
+
+async def process_single_email_websocket(
+    websocket: WebSocket, 
+    gemini_session_config: Dict[str, Any], 
+    email_info: Dict[str, Any],
+    nav_tools
+) -> bool:
+    """
+    Process a single email using WebSocket audio streaming
+    Replaces process_single_email_session from main.py
+    
+    Args:
+        websocket: WebSocket connection
+        gemini_session_config: Gemini session configuration
+        email_info: Current email information
+        nav_tools: Navigation tools for session control
+        
+    Returns:
+        Boolean indicating success
+    """
+    try:
+        # Reset navigation tools for new email session
+        nav_tools.reset_session_state()
+        
+        # Create and run Gemini session with WebSocket audio bridge
+        session_success = await create_gemini_session_with_websocket(
+            gemini_session_config, websocket, email_info
+        )
+        
+        return session_success
+        
+    except Exception as e:
+        print(f"❌ Single email processing error: {e}")
+        await websocket.send_text(json.dumps(
+            create_error_message(f"Email processing error: {str(e)}", recoverable=True).dict()
+        ))
+        return False
+
+
+@app.websocket("/ws/test-audio")
+async def websocket_test_audio(websocket: WebSocket):
+    """
+    Test WebSocket endpoint for audio streaming validation
+    Useful for debugging audio pipeline without full email processing
+    """
+    await websocket.accept()
+    print("🎵 Audio test WebSocket connected")
+    
+    try:
+        while True:
+            # Wait for audio data
+            message = await websocket.receive()
+            
+            if message["type"] == "websocket.receive":
+                if "bytes" in message:
+                    # Echo audio data back
+                    audio_data = message["bytes"]
+                    print(f"🎵 Received audio chunk: {len(audio_data)} bytes")
+                    await websocket.send_bytes(audio_data)  # Echo back
+                elif "text" in message:
+                    # Handle control messages
+                    try:
+                        data = json.loads(message["text"])
+                        print(f"🎵 Received control message: {data}")
+                        await websocket.send_text(json.dumps({"status": "received", "data": data}))
+                    except json.JSONDecodeError:
+                        pass
+    
+    except WebSocketDisconnect:
+        print("🎵 Audio test WebSocket disconnected")
+    except Exception as e:
+        print(f"❌ Audio test error: {e}")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Run the server
+    print("🚀 Starting Email Voice Agent FastAPI Server...")
+    uvicorn.run(
+        "fastapi_server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info"
+    )
