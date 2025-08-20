@@ -11,13 +11,19 @@ import os
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from dotenv import load_dotenv
+import base64
+import io
+from typing import Tuple
+import numpy as np
+import soundfile as sf
+import librosa
 from google import genai
 from google.genai import types
 from mcp_agent.app import MCPApp
 from mcp_agent.agents.agent import Agent
 from custom_tools import EmailNavigationTools
 from gmail_helpers import parse_gmail_search_results
-from audio_handlers import AudioRecorder, AudioPlayer
+from audio_local_bridge import LocalAudioBridge
 
 # Load environment variables
 load_dotenv()
@@ -68,33 +74,52 @@ class EmailManager:
 # System instruction for direct Gmail MCP access
 system_instruction = """You are a voice-driven Gmail assistant with full access to the Gmail API through MCP tools.
 
+## VOICE-ONLY INTERACTION MODE:
+- You are in a VOICE-ONLY session - all user input comes through speech
+- LISTEN ACTIVELY for voice commands at all times
+- Respond to any spoken words, even if unclear
+- Common voice commands include: "archive", "delete", "reply", "next", "skip", "mark as read"
+- Be tolerant of variations: "archive it", "archive this", "archive email" all mean the same thing
+
 ## PRIMARY BEHAVIOR - Single Email Focus:
 - You will be provided with information for ONE email at a time
 - For the email, announce ONLY: sender and subject
 - After reading the email, ask what the user would like to do
-- Wait for the user's command before any action
+- ACTIVELY LISTEN and respond to ANY voice input
 - Possible actions include: reply, archive, delete, mark as read/unread, or skip to next
-- **CRITICAL WORKFLOW**: After you execute ANY action on an email (using tools like gmail_modify_email, gmail_delete_email, gmail_send_email, etc.), you MUST immediately call the complete_current_email tool. This is mandatory.
-- **CRITICAL WORKFLOW**: If the user says "skip", "next", "continue", etc., immediately call the complete_current_email tool
-- Do NOT ask "what would you like to do next" after completing an email action - just call complete_current_email immediately
+- **MANDATORY TWO-STEP WORKFLOW FOR ALL EMAIL ACTIONS**:
+  1. First: Execute the requested action (gmail_modify_email, gmail_delete_email, etc.)
+  2. Second: IMMEDIATELY call complete_current_email IN THE SAME RESPONSE
+  3. Do NOT wait for user confirmation or say anything between these two tool calls
+  4. Example: If user says "archive", you must call BOTH gmail_modify_email AND complete_current_email
+- **CRITICAL**: Never execute an email action without also calling complete_current_email
+- **CRITICAL**: If the user says "skip", "next", "continue", immediately call complete_current_email
+- Do NOT ask "what would you like to do next" after completing an email action
 - This creates an efficient workflow where each email is processed and the system moves forward automatically
 - When performing actions on "this email" or "it", use the email ID that was provided with the email information
 
+## Voice Command Recognition:
+- Respond to simple commands like: "archive", "delete", "next", "skip", "reply"
+- Don't require perfect pronunciation or complete sentences
+- If you hear ANY audio input after asking what to do, interpret it as a command
+- If unclear, ask for clarification but assume the user is giving a command
+
 ## Key Behaviors:
 - Be concise but helpful in your responses
-- Confirm actions concisely
-- When the user says "next", "skip", or "continue", simply acknowledge and call end_session
+- When executing email actions: DO NOT speak between tool calls - just execute both tools
+- When the user says "next", "skip", or "continue", simply call complete_current_email
 - Focus only on the current email - there is no history of previous emails in this session
+- REMEMBER: Always call TWO tools together for email actions (action + complete_current_email)
 
 ## Voice Interaction:
 - Speak clearly and at a moderate pace
-- Use natural language to describe what you're doing
+- Keep responses SHORT - this is voice-only
 - Announce results concisely
 
 ## Email Reading Format:
 When provided with email info, read it as:
 "From [sender] - [subject]
-What would you like to do with this email?"
+What would you like to do?"
 
 ## Important Action Instructions:
 - **CRITICAL**: When archiving an email, you MUST use gmail_modify_email with removeLabelIds: ["INBOX"]. Do NOT add labels like "ARCHIVED". Archiving means removing from the inbox.
@@ -110,7 +135,7 @@ async def send_error_message(session, error_message):
     except Exception as e:
         print(f"Failed to send error message to session: {e}")
 
-async def process_single_email_session(email_manager, nav_tools, gmail_agent, gemini_tools):
+async def process_single_email_session(email_manager, nav_tools, gmail_agent, gemini_tools, audio_bridge=None):
     """Process a single email in its own session"""
     current_email = email_manager.get_current_email()
     if not current_email:
@@ -124,12 +149,81 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
     sender = current_email.get('from', 'Unknown')
     subject = current_email.get('subject', 'No subject')
     
-    recorder = AudioRecorder()
-    player = AudioPlayer()
+    # Use provided bridge or default to LocalAudioBridge
+    if audio_bridge is None:
+        from audio_local_bridge import LocalAudioBridge
+        bridge = LocalAudioBridge()
+    else:
+        bridge = audio_bridge
+    def _is_base64_ascii(b: bytes, probe: int = 128) -> bool:
+        try:
+            sample = b[:probe].decode('ascii')
+        except UnicodeDecodeError:
+            return False
+        allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n\r")
+        return all(ch in allowed for ch in sample)
+
+    def _resample_pcm16(pcm16: bytes, src_rate: int, dst_rate: int) -> bytes:
+        if src_rate == dst_rate:
+            return pcm16
+        x = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32767.0
+        y = librosa.resample(x, orig_sr=src_rate, target_sr=dst_rate, res_type="kaiser_best")
+        y = np.clip(y, -1.0, 1.0)
+        return (y * 32767.0).astype(np.int16).tobytes()
+
+    def _decode_ai_audio_to_pcm16(data: bytes, target_rate: int = 24000) -> Tuple[bytes, int]:
+        """Decode Gemini AI audio to PCM16 mono and standardize to target_rate.
+
+        Returns (pcm_bytes, target_rate).
+        """
+        raw = data
+        # 1) Base64 detection/decoding
+        if _is_base64_ascii(raw):
+            try:
+                raw = base64.b64decode(raw, validate=True)
+            except Exception:
+                # If strict decode fails, try non-strict
+                try:
+                    raw = base64.b64decode(raw)
+                except Exception:
+                    pass
+        # 2) Try to decode via soundfile (handles WAV/OGG/FLAC/etc.)
+        try:
+            with io.BytesIO(raw) as bio:
+                audio, sr = sf.read(bio, dtype='float32', always_2d=False)
+            # Convert to mono if needed
+            if audio.ndim == 2:
+                audio = audio.mean(axis=1)
+            if sr != target_rate:
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=target_rate, res_type="kaiser_best")
+            audio = np.clip(audio, -1.0, 1.0)
+            pcm = (audio * 32767.0).astype(np.int16).tobytes()
+            return pcm, target_rate
+        except Exception:
+            pass
+        # 3) Try raw float32 PCM (little-endian)
+        try:
+            if len(raw) % 4 == 0:
+                f = np.frombuffer(raw, dtype='<f4')
+                if f.size > 0 and np.isfinite(f).all():
+                    f = np.clip(f, -1.0, 1.0)
+                    # Assume source ~48k if unknown, resample to target_rate
+                    src_rate = 48000
+                    if src_rate != target_rate:
+                        f = librosa.resample(f, orig_sr=src_rate, target_sr=target_rate, res_type="kaiser_best")
+                    pcm = (f * 32767.0).astype(np.int16).tobytes()
+                    return pcm, target_rate
+        except Exception:
+            pass
+        # 4) Fallback: assume raw is PCM16 mono; if we cannot infer src sr,
+        # treat it as already at target_rate to avoid pitch/time distortion
+        if len(raw) % 2 == 0:
+            return raw, target_rate
+        return raw, target_rate
     
     # Configuration for Gemini with all discovered MCP tools
     config = {
-        "response_modalities": ["AUDIO"],
+        "response_modalities": ["AUDIO"],  # Audio-only for voice interaction
         "tools": gemini_tools,
         "system_instruction": [system_instruction]
     }
@@ -145,20 +239,30 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                 print(f"📧 Processing Email {email_manager.current_index + 1}/{len(email_manager.emails)}")
                 
                 try:
-                    # Start recording
-                    recorder.start_recording()  # TODO: we don't want to start recording during testing since we'll be using the test audio files
-                    player.start_output_stream()
+                    # Start local audio bridge (mic + speaker)
+                    bridge.start()
                     
                     # Audio streaming task
                     async def stream_audio():
                         """Continuously stream audio data to Gemini without interruption"""
+                        audio_sent_count = 0
                         while not nav_tools.should_end_session():
                             try:
-                                audio_data = recorder.get_audio_data()
+                                audio_data = bridge.get_user_audio()
                                 if audio_data:
                                     await session.send_realtime_input(
                                         audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
                                     )
+                                    audio_sent_count += 1
+                                    # Log every 20th chunk to confirm audio is flowing
+                                    if audio_sent_count % 20 == 0:
+                                        print(f"🎙️ Mic audio flowing: sent {audio_sent_count} chunks to Gemini")
+                                    # Also check audio level to ensure it's not silent
+                                    if audio_sent_count % 50 == 0:
+                                        import numpy as np
+                                        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                                        max_amplitude = np.max(np.abs(audio_array))
+                                        print(f"📊 Audio level: max amplitude = {max_amplitude} (out of 32768)")
                             except Exception as e:
                                 print(f"⚠️ Audio streaming error: {e}")
                                 await send_error_message(session, f"Audio streaming issue: {str(e)}")
@@ -180,15 +284,29 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                                     # Handle interruptions
                                     if response.server_content and response.server_content.interrupted is True:
                                         print("\n🔄 Interrupted")
-                                        player.clear_queue()
+                                        # Clear any queued AI audio to avoid stale playback
+                                        try:
+                                            bridge.clear_ai_audio()
+                                        except Exception:
+                                            pass
+                                    
+                                    # Handle text responses (could be transcriptions or text replies)
+                                    if response.text:
+                                        print(f"💬 Gemini says: {response.text}")
                                     
                                     # Handle audio data
                                     elif response.data is not None:
-                                        player.queue_audio(response.data)
+                                        # Decode Gemini audio to PCM16 (handles base64/container/raw) and play
+                                        pcm16, sr = _decode_ai_audio_to_pcm16(response.data, target_rate=24000)
+                                        bridge.put_ai_audio(pcm16, sample_rate_hz=sr, num_channels=1)
                                     
                                     # Handle tool calls
                                     elif response.tool_call:
                                         function_responses = []
+                                        
+                                        # Log all tools being called in this batch
+                                        tool_names = [fc.name for fc in response.tool_call.function_calls]
+                                        print(f"🔧 Tool batch: {tool_names}")
                                         
                                         for fc in response.tool_call.function_calls:
                                             try:
@@ -223,6 +341,10 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                                                     else:
                                                         response_content["result"] = "Tool executed successfully"
                                                     
+                                                    # Add reminder for email actions to call complete_current_email
+                                                    if fc.name in ["gmail_modify_email", "gmail_delete_email", "gmail_send_email"]:
+                                                        response_content["reminder"] = "Now call complete_current_email to advance to the next email"
+                                                    
                                                     # Create function response
                                                     function_response = types.FunctionResponse(
                                                         id=fc.id,
@@ -242,6 +364,14 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                                         
                                         # Send tool responses
                                         await session.send_tool_response(function_responses=function_responses)
+                                        
+                                        # If we just executed an email action without complete_current_email, remind Gemini
+                                        if any(name in ["gmail_modify_email", "gmail_delete_email", "gmail_send_email"] for name in tool_names):
+                                            if "complete_current_email" not in tool_names:
+                                                print("⚠️ Email action executed without complete_current_email - sending reminder")
+                                                await session.send_realtime_input(
+                                                    text="Please call complete_current_email now to advance to the next email."
+                                                )
                                         
                                         # Check if session should end after tool execution
                                         if nav_tools.should_end_session():
@@ -288,18 +418,10 @@ async def process_single_email_session(email_manager, nav_tools, gmail_agent, ge
                     
                     # Enhanced audio resource cleanup
                     try:
-                        if 'recorder' in locals() and recorder:
-                            recorder.stop_recording()
-                            if hasattr(recorder, 'audio') and recorder.audio:
-                                recorder.audio.terminate()
+                        if 'bridge' in locals() and bridge and not bridge.closed():
+                            bridge.stop()
                     except Exception as e:
-                        print(f"⚠️ Error cleaning up recorder: {e}")
-                    
-                    try:
-                        if 'player' in locals() and player:
-                            player.close()
-                    except Exception as e:
-                        print(f"⚠️ Error cleaning up player: {e}")
+                        print(f"⚠️ Error cleaning up audio bridge: {e}")
     
     except Exception as connection_error:
         print(f"❌ Failed to connect to Gemini: {connection_error}")
