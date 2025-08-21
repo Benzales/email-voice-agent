@@ -46,9 +46,14 @@ class WebSocketAudioBridge:
                 if "bytes" in message:
                     # Raw audio data - send directly to Gemini
                     audio_data = message["bytes"]
-                    # Audio flowing silently (removed spam logs)
+                    # Debug audio format being sent to Gemini
+                    if len(audio_data) > 0 and hash(audio_data) % 200 == 0:  # Log occasionally
+                        print(f"🔍 Sending to Gemini: {len(audio_data)} bytes as audio/pcm;rate=48000 (browser native)")
+                    
+                    # Send audio to Gemini using browser's native sample rate (usually 48kHz)
+                    # This avoids quality degradation from resampling
                     await gemini_session.send_realtime_input(
-                        audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
+                        audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=48000")
                     )
                 elif "text" in message:
                     # JSON message - handle control signals

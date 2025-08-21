@@ -72,10 +72,11 @@ async def test_backend_first():
 
 
 def start_server():
-    """Start the FastAPI server"""
+    """Start the FastAPI server using UV environment"""
     try:
         import uvicorn
         print("🚀 Starting Email Voice Agent FastAPI Server...")
+        print("📍 Using UV environment for better audio quality")
         print("📍 Server will be available at:")
         print("   - HTTP: http://localhost:8000")
         print("   - WebSocket: ws://localhost:8000/ws/voice-session")
