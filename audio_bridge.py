@@ -222,7 +222,6 @@ async def create_gemini_session_with_websocket(gemini_session_config: Dict[str, 
                                     # Use timeout to periodically check session status
                                     async for response in session.receive():
                                         response_count += 1
-                                        print(f"🤖 Response #{response_count}")
                                         
                                         if nav_tools.should_end_session():
                                             print("🤖 Session ending, breaking from response loop")

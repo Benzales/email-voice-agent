@@ -109,6 +109,12 @@ export function useVoiceSession(backendUrl?: string): [VoiceSessionState, VoiceS
         onAudioData: (audioData: ArrayBuffer) => {
           // Play audio through speakers (removed spammy debug logs)
           audioProcessorRef.current?.playAudio(audioData);
+        },
+
+        onInterruption: () => {
+          // Clear audio queue when backend signals interruption
+          console.log('🔄 Clearing audio queue due to interruption');
+          audioProcessorRef.current?.clearAudioQueue();
         }
       });
 
@@ -225,18 +231,40 @@ export function useVoiceSession(backendUrl?: string): [VoiceSessionState, VoiceS
   }, []);
 
   /**
-   * Auto-cleanup on page visibility change
+   * Auto-cleanup on page visibility change and improve reliability
    */
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden && state.isRecording) {
+        console.log('🔄 Page hidden - stopping session for reliability');
+        stopSession();
+      } else if (!document.hidden && state.isConnected && !state.isRecording) {
+        // Resume audio context when page becomes visible
+        if (audioProcessorRef.current) {
+          // Try to resume audio context (private property, so we'll call a method)
+          try {
+            audioProcessorRef.current.initialize();
+          } catch (e) {
+            console.log('Could not resume audio context:', e);
+          }
+        }
+      }
+    };
+
+    const handleBeforeUnload = () => {
+      if (state.isRecording) {
         stopSession();
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [state.isRecording, stopSession]);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [state.isRecording, state.isConnected, stopSession]);
 
   const controls: VoiceSessionControls = {
     connect,
