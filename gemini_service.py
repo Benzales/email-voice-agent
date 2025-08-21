@@ -151,6 +151,13 @@ def convert_mcp_to_gemini_tools(mcp_tools: List[Any]) -> List[types.Tool]:
             }]
         )
         gemini_tools.append(gemini_tool)
+        
+        # Debug first few tools to see their structure
+        if len(gemini_tools) <= 3:
+            print(f"🔧 Tool {len(gemini_tools)}: {tool.name}")
+            print(f"🔧   Description: {tool.description[:100]}...")
+            print(f"🔧   Parameters: {parameters}")
+            print(f"🔧   Original schema keys: {list(tool.inputSchema.keys()) if hasattr(tool, 'inputSchema') and tool.inputSchema else 'None'}")
     
     print(f"✅ Converted {len(gemini_tools)} MCP tools to Gemini format")
     return gemini_tools
@@ -186,6 +193,10 @@ def create_gemini_session_config(gemini_tools: List[types.Tool]) -> Dict[str, An
         "tools": gemini_tools,
         "system_instruction": [system_instruction]
     }
+    
+    print(f"🔧 Session config: {len(gemini_tools)} tools, system instruction length: {len(system_instruction)} chars")
+    print(f"🔧 System instruction preview: {system_instruction[:200]}...")
+    
     return config
 
 

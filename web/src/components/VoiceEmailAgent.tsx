@@ -28,8 +28,12 @@ export default function VoiceEmailAgent({ backendUrl }: VoiceEmailAgentProps) {
     }
   };
 
-  const handleStartSession = () => {
-    sessionControls.startSession('in:inbox', 50);
+  const handleStartSession = async () => {
+    try {
+      await sessionControls.startSession('in:inbox', 50);
+    } catch (error) {
+      console.error('Failed to start session:', error);
+    }
   };
 
   const getStatusColor = () => {

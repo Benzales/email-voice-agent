@@ -107,16 +107,7 @@ export function useVoiceSession(backendUrl?: string): [VoiceSessionState, VoiceS
         },
 
         onAudioData: (audioData: ArrayBuffer) => {
-          // Debug audio data
-          const uint8Array = new Uint8Array(audioData);
-          const sample = uint8Array.slice(0, Math.min(20, uint8Array.length));
-          const sampleStr = Array.from(sample).map(b => String.fromCharCode(b)).join('');
-          
-          console.log(`🎵 Received audio chunk: ${audioData.byteLength} bytes`);
-          console.log(`🎵 First 20 bytes as chars: "${sampleStr}"`);
-          console.log(`🎵 First 20 bytes as hex: ${Array.from(sample).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
-          
-          // Play audio through speakers
+          // Play audio through speakers (removed spammy debug logs)
           audioProcessorRef.current?.playAudio(audioData);
         }
       });
@@ -161,7 +152,7 @@ export function useVoiceSession(backendUrl?: string): [VoiceSessionState, VoiceS
   /**
    * Start a voice session
    */
-  const startSession = useCallback((emailQuery = 'in:inbox', maxResults = 50) => {
+  const startSession = useCallback(async (emailQuery = 'in:inbox', maxResults = 50) => {
     if (!wsClientRef.current?.isConnected()) {
       updateState({ error: 'Not connected to backend' });
       return;
@@ -174,7 +165,7 @@ export function useVoiceSession(backendUrl?: string): [VoiceSessionState, VoiceS
 
     try {
       // Start recording audio
-      audioProcessorRef.current.startRecording((audioData: ArrayBuffer) => {
+      await audioProcessorRef.current.startRecording((audioData: ArrayBuffer) => {
         wsClientRef.current?.sendAudio(audioData);
       });
 

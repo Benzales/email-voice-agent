@@ -46,6 +46,7 @@ class WebSocketAudioBridge:
                 if "bytes" in message:
                     # Raw audio data - send directly to Gemini
                     audio_data = message["bytes"]
+                    # Audio flowing silently (removed spam logs)
                     await gemini_session.send_realtime_input(
                         audio=types.Blob(data=audio_data, mime_type="audio/pcm;rate=16000")
                     )
@@ -53,6 +54,7 @@ class WebSocketAudioBridge:
                     # JSON message - handle control signals
                     try:
                         data = json.loads(message["text"])
+                        # Control message received (removed spam logs)
                         if data.get("type") == "stop_session":
                             print("🛑 Received stop signal from frontend")
                             return "stop_session"
@@ -71,16 +73,32 @@ class WebSocketAudioBridge:
         try:
             # Handle interruptions
             if response.server_content and response.server_content.interrupted is True:
-                print("\n🔄 Interrupted")
+                print("\n🔄 Gemini interrupted")
                 await self.websocket.send_text(json.dumps({"type": "audio_interrupted"}))
             
             # Handle audio data - send to WebSocket
             elif response.data is not None:
                 await self.websocket.send_bytes(response.data)  # Send raw bytes
             
-            # Tool calls are handled elsewhere
+            # Handle tool calls - this is where user commands should trigger
             elif response.tool_call:
+                print(f"🤖 Gemini wants to call tools: {[fc.name for fc in response.tool_call.function_calls]}")
                 return response.tool_call
+            
+            # Handle other response types
+            elif response.server_content:
+                print(f"🤖 Gemini server content: {response.server_content}")
+            elif hasattr(response, 'text') and response.text:
+                print(f"🤖 Gemini text response: {response.text}")
+            else:
+                print(f"🤖 Gemini response type: {type(response)}")
+                # Debug all response attributes
+                attrs = [attr for attr in dir(response) if not attr.startswith('_')]
+                print(f"🤖 Response attributes: {attrs}")
+                for attr in ['tool_call', 'data', 'server_content', 'text']:
+                    if hasattr(response, attr):
+                        value = getattr(response, attr)
+                        print(f"🤖   {attr}: {value} (type: {type(value)})")
                 
         except Exception as e:
             print(f"⚠️ Error handling Gemini response: {e}")
@@ -161,64 +179,123 @@ async def create_gemini_session_with_websocket(gemini_session_config: Dict[str, 
                         text=f"Please read me this email and ask what I'd like to do with it. The email is: {email_info['display_text']} [Current email ID: {email_info['id']}]."
                     )
                     
+                    # Test command removed - voice commands should work now
+                    
                     # Start audio streaming
                     await audio_bridge.start_streaming(session, nav_tools)
                     
                     # Create tasks for handling WebSocket messages and Gemini responses
                     async def handle_websocket_messages():
                         """Handle incoming WebSocket messages"""
+                        print("🎤 Starting WebSocket message handler - waiting for voice input...")
                         while not nav_tools.should_end_session():
                             try:
-                                message = await asyncio.wait_for(websocket.receive(), timeout=0.1)
+                                message = await asyncio.wait_for(websocket.receive(), timeout=0.5)
                                 result = await audio_bridge.handle_websocket_message(message, session)
                                 if result == "stop_session":
+                                    print("🛑 Stop session requested via WebSocket")
                                     nav_tools.end_session()
                                     break
                             except asyncio.TimeoutError:
+                                # Normal timeout, continue listening for voice input
                                 continue
-                            except Exception as e:
-                                print(f"⚠️ WebSocket message error: {e}")
+                            except asyncio.CancelledError:
+                                print("🎤 WebSocket message handler cancelled")
                                 break
+                            except Exception as e:
+                                # Don't spam logs with WebSocket errors
+                                if "disconnect" not in str(e).lower():
+                                    print(f"⚠️ WebSocket error: {e}")
+                                break
+                        
+                        print("🎤 WebSocket message handler ended")
                     
                     async def handle_gemini_responses():
-                        """Handle Gemini Live responses"""
+                        """Continuous Gemini Live response handler - runs for entire session"""
+                        print("🤖 Starting CONTINUOUS Gemini response handler...")
+                        response_count = 0
+                        
                         try:
-                            async for response in session.receive():
-                                if nav_tools.should_end_session():
-                                    break
+                            # Continuous listening loop - don't exit when Gemini finishes speaking
+                            while not nav_tools.should_end_session():
+                                try:
+                                    # Use timeout to periodically check session status
+                                    async for response in session.receive():
+                                        response_count += 1
+                                        print(f"🤖 Response #{response_count}")
+                                        
+                                        if nav_tools.should_end_session():
+                                            print("🤖 Session ending, breaking from response loop")
+                                            break
+                                        
+                                        # Let audio bridge handle audio responses
+                                        tool_call = await audio_bridge.handle_gemini_response(response)
+                                        
+                                        # Handle tool calls (this is where user commands get processed)
+                                        if tool_call:
+                                            print(f"🔧 Processing tool calls: {[fc.name for fc in tool_call.function_calls]}")
+                                            function_responses = []
+                                            
+                                            for fc in tool_call.function_calls:
+                                                print(f"🔧 Executing tool: {fc.name}")
+                                                function_response = await handle_tool_execution(
+                                                    email_info.get('gmail_agent'), fc, nav_tools
+                                                )
+                                                function_responses.append(function_response)
+                                            
+                                            # Send tool responses back to Gemini
+                                            await session.send_tool_response(function_responses=function_responses)
+                                            
+                                            # Check if session should end after tool execution
+                                            if nav_tools.should_end_session():
+                                                print("🎯 Tool execution completed - session should end")
+                                                break
+                                        
+                                        # If Gemini indicates turn is complete, continue listening for new input
+                                        if (hasattr(response, 'server_content') and 
+                                            response.server_content and 
+                                            response.server_content.turn_complete):
+                                            print("🤖 Gemini turn complete - continuing to listen for user input...")
+                                            # Don't break - keep listening for more responses triggered by user input
+                                            
+                                except StopAsyncIteration:
+                                    # session.receive() ended, but session should continue
+                                    print("🤖 Gemini receive ended, but session continues...")
+                                    await asyncio.sleep(0.1)
+                                    continue
+                                except Exception as response_error:
+                                    print(f"⚠️ Gemini response error: {response_error}")
+                                    await asyncio.sleep(0.1)
+                                    continue
                                 
-                                # Let audio bridge handle audio responses
-                                tool_call = await audio_bridge.handle_gemini_response(response)
-                                
-                                # Handle tool calls
-                                if tool_call:
-                                    function_responses = []
-                                    
-                                    for fc in tool_call.function_calls:
-                                        function_response = await handle_tool_execution(
-                                            email_info.get('gmail_agent'), fc, nav_tools
-                                        )
-                                        function_responses.append(function_response)
-                                    
-                                    # Send tool responses back to Gemini
-                                    await session.send_tool_response(function_responses=function_responses)
-                                    
-                                    # Check if session should end after tool execution
-                                    if nav_tools.should_end_session():
-                                        break
+                        except asyncio.CancelledError:
+                            print("🤖 Continuous Gemini response handler cancelled")
                         except Exception as e:
-                            print(f"⚠️ Gemini response error: {e}")
+                            print(f"⚠️ Continuous Gemini handler error: {e}")
+                        
+                        print("🤖 Continuous Gemini response handler ended")
                     
                     # Run both tasks concurrently
                     websocket_task = asyncio.create_task(handle_websocket_messages())
                     gemini_task = asyncio.create_task(handle_gemini_responses())
                     
-                    # Wait for either task to complete or session to end
+                    # Wait specifically for the session to end (when user gives a command)
+                    # Don't exit just because a task completes - wait for nav_tools signal
                     try:
-                        await asyncio.wait(
-                            [websocket_task, gemini_task],
-                            return_when=asyncio.FIRST_COMPLETED
-                        )
+                        while not nav_tools.should_end_session():
+                            # Check if either task has failed
+                            if websocket_task.done() and websocket_task.exception():
+                                print(f"❌ WebSocket task failed: {websocket_task.exception()}")
+                                break
+                            if gemini_task.done() and gemini_task.exception():
+                                print(f"❌ Gemini task failed: {gemini_task.exception()}")
+                                break
+                            
+                            # Small delay to prevent busy waiting
+                            await asyncio.sleep(0.1)
+                        
+                        print("🎯 Session ending - nav_tools.should_end_session() is True")
+                        
                     finally:
                         # Cancel remaining tasks
                         websocket_task.cancel()

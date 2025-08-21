@@ -196,6 +196,20 @@ async def websocket_voice_session(websocket: WebSocket):
         
         # Create Gemini session configuration
         gemini_session_config = create_gemini_session_config(gemini_tools_with_nav)
+        print(f"🔧 Gemini session config has {len(gemini_session_config['tools'])} tools:")
+        for i, tool in enumerate(gemini_session_config['tools']):
+            try:
+                # Handle different tool object types
+                if hasattr(tool, 'function_declarations'):
+                    if isinstance(tool.function_declarations, list):
+                        tool_names = [fd.name if hasattr(fd, 'name') else fd.get('name', 'unknown') for fd in tool.function_declarations]
+                    else:
+                        tool_names = [tool.function_declarations.name if hasattr(tool.function_declarations, 'name') else 'unknown']
+                else:
+                    tool_names = ['unknown_tool']
+                print(f"🔧   Tool {i+1}: {tool_names}")
+            except Exception as e:
+                print(f"🔧   Tool {i+1}: Error getting name - {e}")
         
         # Initialize session state
         app_state.current_session = {
