@@ -167,13 +167,13 @@ async def websocket_voice_session(websocket: WebSocket):
     session_config = SessionConfig()
     
     try:
-        # Send initial status
+        # Send initial status - connected but not processing yet
         await websocket.send_text(json.dumps(
-            create_session_status_message(SessionStatus.INITIALIZING, "Setting up email session...").dict()
+            create_session_status_message(SessionStatus.INITIALIZING, "Connected! Loading email count...").dict()
         ))
         
-        # Initialize email manager with inbox emails
-        print("📧 Fetching inbox emails...")
+        # Fetch email count without starting processing
+        print("📧 Fetching inbox email count...")
         email_manager = await initialize_email_manager(
             app_state.gmail_agent, 
             query=session_config.email_query,
@@ -182,10 +182,36 @@ async def websocket_voice_session(websocket: WebSocket):
         
         if email_manager.is_exhausted():
             await websocket.send_text(json.dumps(
-                create_error_message("No emails found in inbox", recoverable=False).dict()
+                create_session_status_message(SessionStatus.COMPLETED, "No emails found in inbox").dict()
             ))
-            await websocket.close()
             return
+        
+        # Send ready status with email count - wait for user to start
+        email_count = len(email_manager.emails)
+        await websocket.send_text(json.dumps(
+            create_session_status_message(
+                SessionStatus.READY, 
+                f"Ready! Found {email_count} emails in your inbox",
+                progress={"current": 0, "total": email_count, "remaining": email_count}
+            ).dict()
+        ))
+        
+        print(f"✅ Ready to process {email_count} emails - waiting for user to start...")
+        
+        # Wait for start command from frontend
+        while True:
+            try:
+                message = await websocket.receive_text()
+                data = json.loads(message)
+                if data.get("type") == "start_session":
+                    print("🚀 User started voice session - beginning email processing...")
+                    break
+                elif data.get("type") == "stop_session":
+                    print("🛑 User cancelled session")
+                    return
+            except Exception as e:
+                print(f"⚠️ Error waiting for start command: {e}")
+                break
         
         # Create navigation tools
         nav_tools = create_navigation_tools(email_manager)

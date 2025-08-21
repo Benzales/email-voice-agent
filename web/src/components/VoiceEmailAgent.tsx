@@ -5,7 +5,7 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useVoiceSession } from '@/hooks/useVoiceSession';
 
 interface VoiceEmailAgentProps {
@@ -15,29 +15,37 @@ interface VoiceEmailAgentProps {
 export default function VoiceEmailAgent({ backendUrl }: VoiceEmailAgentProps) {
   const wsUrl = backendUrl || process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost:8000/ws/voice-session';
   const [sessionState, sessionControls] = useVoiceSession(wsUrl);
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
 
-  const handleConnect = async () => {
-    setIsConnecting(true);
-    try {
-      await sessionControls.connect();
-    } catch (error) {
-      console.error('Failed to connect:', error);
-    } finally {
-      setIsConnecting(false);
-    }
-  };
+  // Auto-connect on component mount
+  useEffect(() => {
+    const autoConnect = async () => {
+      if (!sessionState.isConnected && sessionState.sessionStatus === 'idle') {
+        try {
+          await sessionControls.connect();
+        } catch (error) {
+          console.error('Auto-connect failed:', error);
+        }
+      }
+    };
+    
+    autoConnect();
+  }, [sessionState.isConnected, sessionState.sessionStatus, sessionControls]);
 
-  const handleStartSession = async () => {
+  const handleClearInbox = async () => {
+    setIsStarting(true);
     try {
       await sessionControls.startSession('in:inbox', 50);
     } catch (error) {
-      console.error('Failed to start session:', error);
+      console.error('Failed to start inbox clearing:', error);
+    } finally {
+      setIsStarting(false);
     }
   };
 
   const getStatusColor = () => {
     switch (sessionState.sessionStatus) {
+      case 'ready':
       case 'active':
       case 'processing':
         return 'text-green-600';
@@ -57,6 +65,8 @@ export default function VoiceEmailAgent({ backendUrl }: VoiceEmailAgentProps) {
     if (sessionState.sessionStatus === 'processing') return '⚡';
     if (sessionState.sessionStatus === 'error') return '❌';
     if (sessionState.sessionStatus === 'completed') return '✅';
+    if (sessionState.sessionStatus === 'ready') return '📧';
+    if (sessionState.sessionStatus === 'initializing') return '🔄';
     if (sessionState.isConnected) return '🔗';
     return '🔌';
   };
@@ -81,11 +91,14 @@ export default function VoiceEmailAgent({ backendUrl }: VoiceEmailAgentProps) {
             <span className="text-2xl">{getStatusIcon()}</span>
           </div>
           <p className={`text-sm font-medium ${getStatusColor()}`}>
-            {sessionState.statusMessage}
+            {sessionState.sessionStatus === 'ready' && sessionState.progress 
+              ? `Ready! ${sessionState.progress.total} emails in your inbox`
+              : sessionState.statusMessage
+            }
           </p>
           
-          {/* Progress Display */}
-          {sessionState.progress && (
+          {/* Progress Display - only show during active processing */}
+          {sessionState.progress && sessionState.sessionStatus === 'processing' && sessionState.progress.current > 0 && (
             <div className="mt-3">
               <div className="flex justify-between text-xs text-gray-600 mb-1">
                 <span>Email Progress</span>
@@ -115,42 +128,54 @@ export default function VoiceEmailAgent({ backendUrl }: VoiceEmailAgentProps) {
           )}
         </div>
 
-        {/* Controls */}
+        {/* Single Button Interface */}
         <div className="space-y-3">
-          {!sessionState.isConnected ? (
-            <button
-              onClick={handleConnect}
-              disabled={isConnecting}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
-            >
-              {isConnecting ? 'Connecting...' : 'Connect to Backend'}
-            </button>
-          ) : (
-            <>
-              {!sessionState.isRecording ? (
-                <button
-                  onClick={handleStartSession}
-                  disabled={sessionState.sessionStatus === 'initializing'}
-                  className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
-                >
-                  🎤 Start Voice Session
-                </button>
+          {sessionState.sessionStatus === 'idle' || sessionState.sessionStatus === 'initializing' || sessionState.sessionStatus === 'ready' ? (
+            <div className="text-center">
+              {sessionState.sessionStatus === 'initializing' ? (
+                <div className="w-full bg-blue-100 text-blue-800 font-semibold py-3 px-6 rounded-lg">
+                  🔄 {sessionState.statusMessage}
+                </div>
               ) : (
                 <button
-                  onClick={sessionControls.stopSession}
-                  className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+                  onClick={handleClearInbox}
+                  disabled={isStarting || !sessionState.isConnected}
+                  className="w-full bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 disabled:from-gray-300 disabled:to-gray-400 text-white font-bold py-4 px-8 rounded-xl transition-all duration-200 transform hover:scale-105 disabled:hover:scale-100"
                 >
-                  🛑 Stop Session
+                  {isStarting ? (
+                    '🔄 Starting...'
+                  ) : sessionState.progress ? (
+                    `🎤 Clear My Inbox (${sessionState.progress.total} emails)`
+                  ) : (
+                    '🎤 Clear My Inbox'
+                  )}
                 </button>
               )}
-              
+            </div>
+          ) : sessionState.isRecording ? (
+            <div className="space-y-3">
+              <button
+                onClick={sessionControls.stopSession}
+                className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+              >
+                🛑 Stop Session
+              </button>
+              <div className="text-center text-sm text-gray-600">
+                Speak your commands: &quot;archive&quot;, &quot;delete&quot;, &quot;skip&quot;, &quot;reply&quot;
+              </div>
+            </div>
+          ) : (
+            <div className="text-center">
+              <div className="w-full bg-green-100 text-green-800 font-semibold py-3 px-6 rounded-lg mb-3">
+                ✅ {sessionState.statusMessage}
+              </div>
               <button
                 onClick={sessionControls.disconnect}
                 className="w-full bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-6 rounded-lg transition-colors"
               >
-                Disconnect
+                Reset
               </button>
-            </>
+            </div>
           )}
         </div>
 

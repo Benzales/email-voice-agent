@@ -10,7 +10,7 @@ import { VoiceWebSocketClient, createVoiceWebSocketClient, SessionStatus } from 
 export interface VoiceSessionState {
   isConnected: boolean;
   isRecording: boolean;
-  sessionStatus: 'idle' | 'initializing' | 'active' | 'processing' | 'completed' | 'error';
+  sessionStatus: 'idle' | 'initializing' | 'ready' | 'active' | 'processing' | 'completed' | 'error';
   statusMessage: string;
   progress: {
     current: number;

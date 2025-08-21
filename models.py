@@ -25,6 +25,7 @@ class MessageType(str, Enum):
 
 class SessionStatus(str, Enum):
     INITIALIZING = "initializing"
+    READY = "ready"
     ACTIVE = "active" 
     PROCESSING = "processing"
     COMPLETED = "completed"
