@@ -2,7 +2,7 @@
 
 ## Overview
 
-A voice-driven Gmail assistant that helps users clear their inbox through natural voice commands. The application uses a modern web-based architecture with FastAPI backend and Next.js frontend, connected via WebSocket for real-time audio streaming.
+A voice-driven Gmail assistant that helps users clear their inbox through natural voice commands. The application uses a modern web-based architecture with FastAPI backend and Next.js frontend, connected via WebSocket for real-time audio streaming. Features complete OAuth 2.0 integration for secure multi-user Gmail access.
 
 ## 🏗️ Architecture Overview
 
@@ -15,15 +15,22 @@ A voice-driven Gmail assistant that helps users clear their inbox through natura
 │  │  │ VoiceEmailAgent │  │     Audio Pipeline          │   │    │
 │  │  │    Component    │  │  • WebRTC Microphone        │   │    │
 │  │  │                 │  │  • Web Audio API            │   │    │
-│  │  │ • Single Button │  │  • 48kHz Native Audio       │   │    │
-│  │  │ • Auto-connect  │  │  • No Resampling            │   │    │
+│  │  │ • OAuth UI      │  │  • 48kHz Native Audio       │   │    │
+│  │  │ • User Profile  │  │  • No Resampling            │   │    │
 │  │  │ • Status Display│  │  • Real-time Streaming      │   │    │
 │  │  └─────────────────┘  └─────────────────────────────┘   │    │
+│  │  ┌─────────────────────────────────────────────────┐       │    │
+│  │  │           Authentication System                 │       │    │
+│  │  │  • useAuth Hook (State Management)             │       │    │
+│  │  │  • AuthButton (Login/Logout UI)                │       │    │
+│  │  │  • OAuth Callback Handler                      │       │    │
+│  │  │  • Protected Routes & Guards                   │       │    │
+│  │  └─────────────────────────────────────────────────┘       │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
                                     │
-                              WebSocket Connection
-                            (Bidirectional Audio)
+                        WebSocket Connection + OAuth
+                         (Bidirectional Audio + Auth)
                                     │
 ┌─────────────────────────────────────────────────────────────────┐
 │                     FastAPI Backend                             │
@@ -34,34 +41,115 @@ A voice-driven Gmail assistant that helps users clear their inbox through natura
 │  │  • Tool Execution Handler                              │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────────────┐    │
+│  │               OAuth Services                            │    │
+│  │  • OAuth Service (Google OAuth 2.0)                    │    │
+│  │  • User Session Manager (Multi-user)                   │    │
+│  │  • Token Refresh & Validation                          │    │
+│  │  • Secure Session Storage                              │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────────┐    │
 │  │               Core Services                             │    │
-│  │  • Email Service (EmailManager)                        │    │
+│  │  • Email Service (OAuth + MCP Modes)                   │    │
 │  │  • Gemini Service (MCP Integration)                    │    │
 │  │  • Custom Tools (Navigation)                           │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
                                     │
-                              API Connections
+                        API Connections + OAuth
                                     │
 ┌─────────────────────────────────────────────────────────────────┐
 │                    External Services                            │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌─────────────┐   │
-│  │   Gmail API      │  │  Gemini Live API │  │  MCP Server │   │
-│  │  (via MCP)       │  │  (Voice AI)     │  │  (Tools)    │   │
+│  │   Gmail API      │  │  Gemini Live API │  │Google OAuth │   │
+│  │ (Direct + MCP)   │  │  (Voice AI)     │  │   Server    │   │
 │  └──────────────────┘  └──────────────────┘  └─────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+## 🔐 OAuth Authentication System
+
+### Multi-User Authentication Flow
+The application supports secure OAuth 2.0 authentication allowing multiple users to access their personal Gmail accounts through the voice interface.
+
+#### **Authentication Architecture**
+```
+User Authentication Flow:
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Frontend      │    │    Backend      │    │  Google OAuth   │
+│  (Next.js)      │    │   (FastAPI)     │    │    Server       │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+    1. Click "Sign in"           │                       │
+         │ ─────────────────────▶│                       │
+         │                  2. Generate Auth URL         │
+         │                       │ ─────────────────────▶│
+         │                       │                  3. Return URL
+         │                       │ ◀─────────────────────│
+         │ ◀─────────────────────│                       │
+    4. Redirect to Google        │                       │
+         │ ─────────────────────────────────────────────▶│
+         │                       │                  5. User Consent
+         │                       │                       │
+         │                  6. Callback with Code        │
+         │                       │ ◀─────────────────────│
+         │                  7. Exchange Code for Tokens  │
+         │                       │ ─────────────────────▶│
+         │                       │                  8. Return Tokens
+         │                       │ ◀─────────────────────│
+         │                  9. Create User Session       │
+         │ ◀─────────────────────│                       │
+   10. Authenticated State       │                       │
+```
+
+#### **OAuth Components**
+
+**Frontend Authentication:**
+- **`useAuth` Hook**: Complete authentication state management
+- **`AuthButton`**: Google-branded login/logout interface
+- **`UserProfile`**: Displays authenticated user information
+- **`ProtectedRoute`**: Authentication guards for protected content
+- **OAuth Callback Page**: Handles post-authentication redirect
+
+**Backend OAuth Services:**
+- **`oauth_service.py`**: Google OAuth 2.0 flow management
+- **`user_session.py`**: Multi-user session storage and management
+- **OAuth Endpoints**: Complete REST API for authentication operations
+
+#### **Supported OAuth Scopes**
+- `https://www.googleapis.com/auth/gmail.modify` - Full Gmail access for email management
+- `https://www.googleapis.com/auth/userinfo.email` - User email address
+- `https://www.googleapis.com/auth/userinfo.profile` - User profile information
+- `openid` - OpenID Connect authentication
+
+#### **Session Management**
+- **In-Memory Storage**: Secure session storage with automatic cleanup
+- **Token Refresh**: Automatic refresh token handling
+- **Session Timeout**: 24-hour session expiry with periodic cleanup
+- **Multi-User Support**: Concurrent sessions for multiple users
+- **Security Features**: CSRF protection, token revocation, secure logout
 
 ## 🎨 User Interface Design
 
 ### Single-Button Experience
 The UI follows a streamlined, voice-first design philosophy:
 
-#### **Initial State**
-- **Auto-connects** to backend on page load
-- **Fetches email count** without starting processing
+#### **Unauthenticated State**
+- **Authentication UI**: "Sign in with Google" button with Google branding
+- **User guidance**: Clear messaging about Gmail access requirements
+- **Security info**: Explains OAuth permissions and data access
+
+#### **Authentication Flow State**
+- **Processing**: Shows loading spinner during OAuth flow
+- **Callback handling**: Processes OAuth callback and creates session
+- **Success confirmation**: Displays welcome message and redirects
+
+#### **Authenticated Initial State**
+- **User profile**: Shows authenticated user's name, email, and profile picture
+- **Auto-connects** to backend with user's OAuth tokens
+- **Fetches email count** for the authenticated user's inbox
 - **Displays**: "Ready! X emails in your inbox"
 - **Single button**: "🎤 Clear My Inbox (X emails)"
+- **Sign out option**: Red "Sign Out" button in profile section
 
 #### **Active Session State**
 - **Recording indicator**: Shows microphone is active
@@ -75,18 +163,44 @@ The UI follows a streamlined, voice-first design philosophy:
 
 ## 🔄 Application Flow
 
-### 1. Initialization Phase
+### 1. Authentication Phase
 ```
-Page Load → Auto-connect WebSocket → Fetch Email Count → Show Ready State
+Page Load → Check Auth Status → Show Login/Authenticated UI
 ```
 
 **Technical Details:**
-- Next.js component auto-triggers WebSocket connection
-- FastAPI backend connects to Gmail MCP server
-- Email count fetched and displayed to user
-- System waits for explicit user action
+- Next.js component checks for stored session ID in localStorage
+- If session exists, validates with backend `/auth/status` endpoint
+- Shows appropriate UI: login form or authenticated user interface
+- OAuth flow initiated when user clicks "Sign in with Google"
 
-### 2. Session Start Phase
+#### **OAuth Flow Details:**
+```
+Click Sign In → Generate Auth URL → Google Consent → Backend Callback → Session Creation → Frontend Redirect → Authenticated State
+```
+
+**Step-by-step:**
+1. **Frontend**: `POST /auth/login` → Backend generates Google OAuth URL
+2. **Redirect**: User sent to Google OAuth consent screen
+3. **Google Callback**: `GET /auth/callback?code=...` → Backend receives authorization code
+4. **Token Exchange**: Backend exchanges code for access/refresh tokens
+5. **Session Creation**: Backend creates user session with tokens
+6. **Frontend Redirect**: Backend redirects to `http://localhost:3000/auth/callback?session_id=...&success=true`
+7. **Session Storage**: Frontend stores session ID in localStorage
+8. **Auth State Update**: useAuth hook updates to authenticated state
+
+### 2. Initialization Phase (Authenticated Users)
+```
+Authentication Complete → Auto-connect WebSocket → Fetch Email Count → Show Ready State
+```
+
+**Technical Details:**
+- Next.js component auto-triggers WebSocket connection (only if authenticated)
+- FastAPI backend uses user's OAuth tokens for Gmail API access
+- Email count fetched from authenticated user's Gmail account
+- System waits for explicit user action to start voice processing
+
+### 3. Session Start Phase
 ```
 User Clicks Button → Start Voice Session → Initialize Gemini Live → Begin Email Processing
 ```
@@ -97,7 +211,7 @@ User Clicks Button → Start Voice Session → Initialize Gemini Live → Begin 
 - Audio bridge establishes bidirectional streaming
 - First email announced to user
 
-### 3. Email Processing Loop
+### 4. Email Processing Loop
 ```
 Announce Email → Wait for Voice Command → Execute Tool → Confirm Action → Next Email
 ```
@@ -111,7 +225,7 @@ Announce Email → Wait for Voice Command → Execute Tool → Confirm Action �
 6. **Session Completion**: complete_current_email tool called automatically
 7. **Next Email**: New isolated session starts for next email
 
-### 4. Session Management
+### 5. Session Management
 ```
 Isolated Sessions → One Gemini Session Per Email → Clean State Reset → Resource Cleanup
 ```
@@ -156,17 +270,35 @@ WebSocket → Audio Bridge → Gemini Live Session → Tool Execution → Respon
 
 ### Core Services Architecture
 ```
-fastapi_server.py (Orchestration)
-├── email_service.py (Email Management)
+fastapi_server.py (Orchestration + OAuth Endpoints)
+├── oauth_service.py (Google OAuth 2.0 Management)
+├── user_session.py (Multi-user Session Management)
+├── email_service.py (Email Management - OAuth + MCP)
+├── email_service_oauth.py (OAuth-specific Email Operations)
 ├── gemini_service.py (AI Integration)  
 ├── audio_bridge.py (Audio Streaming)
-├── models.py (Type Safety)
+├── models.py (Type Safety + OAuth Models)
 └── custom_tools.py (Navigation)
 ```
 
-#### **Email Service** (`email_service.py`)
+#### **OAuth Service** (`oauth_service.py`)
+- **Google OAuth 2.0 Flow**: Complete authorization URL generation and code exchange
+- **Token Management**: Access token refresh and validation
+- **Gmail API Integration**: Direct Gmail service creation with user tokens
+- **Security Features**: CSRF protection, token revocation, scope validation
+
+#### **User Session Manager** (`user_session.py`)
+- **Multi-User Support**: Concurrent sessions for multiple authenticated users
+- **Session Storage**: In-memory storage with automatic cleanup and expiry
+- **Token Refresh**: Automatic refresh token handling for expired sessions
+- **Session Validation**: Real-time session and token validation
+- **Resource Management**: Proper cleanup and memory management
+
+#### **Email Service** (`email_service.py` + `email_service_oauth.py`)
+- **Dual Mode Support**: Both OAuth direct API and MCP agent modes
 - **EmailManager**: Sequential email processing with deterministic state
-- **Email Fetching**: Gmail MCP integration for inbox search
+- **OAuth Email Operations**: Direct Gmail API calls with user tokens
+- **Email Fetching**: Gmail search with user-specific authentication
 - **Progress Tracking**: Current/total/remaining email counts
 - **State Management**: Clean email iteration and completion detection
 
@@ -202,8 +334,14 @@ fastapi_server.py (Orchestration)
 // Raw audio data (48kHz PCM)
 WebSocket.send(audioBytes)
 
-// Session control
-{ type: "start_session", email_query: "in:inbox", max_results: 50 }
+// Session control (OAuth-aware)
+{ 
+  type: "start_session", 
+  email_query: "in:inbox", 
+  max_results: 50,
+  user_id: "google_user_id",      // OAuth user identification
+  access_token: "oauth_token"     // User's Gmail access token
+}
 { type: "stop_session", reason: "user_requested" }
 { type: "ping" } // Keepalive
 ```
@@ -213,10 +351,37 @@ WebSocket.send(audioBytes)
 // Audio responses (base64-encoded from Gemini)
 WebSocket.send(audioBytes)
 
-// Session status updates
-{ type: "session_status", status: "ready", message: "Ready! 7 emails in inbox", progress: {...} }
+// Session status updates (OAuth-aware)
+{ 
+  type: "session_status", 
+  status: "ready", 
+  message: "Ready! 7 emails in inbox", 
+  progress: {...},
+  user_email: "user@gmail.com"    // Authenticated user context
+}
 { type: "error", message: "...", recoverable: true }
 { type: "audio_interrupted" } // Clear audio queue
+```
+
+#### **OAuth REST API Endpoints**
+```typescript
+// Authentication Flow
+POST /auth/login          → Generate OAuth authorization URL
+GET  /auth/callback       → Handle Google OAuth callback
+GET  /auth/status         → Check current authentication status
+POST /auth/logout         → Logout and revoke tokens
+GET  /auth/user          → Get authenticated user information
+GET  /auth/sessions      → Monitor active sessions (admin)
+
+// Example OAuth Flow:
+POST /auth/login { redirect_uri?: string }
+→ { authorization_url: "https://accounts.google.com/...", state: "..." }
+
+GET /auth/callback?code=...&state=...
+→ 302 Redirect to frontend with session_id
+
+GET /auth/status (Authorization: Bearer session_id)
+→ { status: "authenticated", user: {...}, expires_at: "...", scopes: [...] }
 ```
 
 ## 🎤 Voice Command Processing
@@ -366,19 +531,31 @@ Gemini: "I've deleted that email."
 - ✅ **All Gmail actions**: Archive, delete, mark read/unread, reply, skip
 - ✅ **Perfect audio**: Natural speech quality and recognition
 - ✅ **Reliable sessions**: Continuous listening and proper tool execution
-- ✅ **Clean UX**: Single-button interface with auto-connect
+- ✅ **OAuth Authentication**: Complete Google OAuth 2.0 integration
+- ✅ **Multi-user support**: Multiple users can authenticate simultaneously
+- ✅ **Clean UX**: Authentication-aware interface with user profiles
 
 ### Technical Excellence
-- ✅ **Modern stack**: FastAPI + Next.js + TypeScript
+- ✅ **Modern stack**: FastAPI + Next.js + TypeScript + OAuth 2.0
 - ✅ **Real-time audio**: WebSocket streaming with perfect quality
-- ✅ **Type safety**: Pydantic models throughout
-- ✅ **Error handling**: Comprehensive error recovery
-- ✅ **Production ready**: Deployable to Vercel + Railway/Render
+- ✅ **Secure authentication**: Google OAuth with proper token management
+- ✅ **Type safety**: Pydantic models throughout (including auth models)
+- ✅ **Error handling**: Comprehensive error recovery and auth state management
+- ✅ **Production ready**: Deployable to Vercel + Railway/Render with OAuth
+
+### OAuth & Security Features
+- ✅ **Google OAuth 2.0**: Complete authorization flow with CSRF protection
+- ✅ **Token management**: Automatic refresh, validation, and revocation
+- ✅ **Session security**: Secure session storage with 24-hour expiry
+- ✅ **Multi-user isolation**: Each user's Gmail access completely isolated
+- ✅ **Scope management**: Proper Gmail permissions and user consent
+- ✅ **Authentication guards**: Protected routes and conditional rendering
 
 ### Performance Optimizations
 - ✅ **Audio quality**: Native 48kHz without interpolation artifacts
-- ✅ **Session isolation**: Clean state per email
+- ✅ **Session isolation**: Clean state per email and per user
 - ✅ **Efficient streaming**: Batched audio processing
 - ✅ **Resource management**: Proper cleanup and monitoring
+- ✅ **Authentication efficiency**: Optimized auth checks and token refresh
 
-The web-based voice email agent successfully replaces the terminal-only version with improved reliability, better user experience, and production-ready deployment capabilities.
+The web-based voice email agent now provides enterprise-grade OAuth authentication while maintaining the streamlined voice-first user experience. Multiple users can securely access their personal Gmail accounts through natural voice commands.
