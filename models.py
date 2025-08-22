@@ -6,6 +6,7 @@ Provides type safety for communication between frontend and backend
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List, Union
 from enum import Enum
+from datetime import datetime
 
 
 # Enums for message types
@@ -140,6 +141,80 @@ class SessionConfig(BaseModel):
     max_results: int = Field(default=50, description="Maximum emails to fetch")
     session_timeout: float = Field(default=120.0, description="Session timeout in seconds")
     audio_format: str = Field(default="audio/pcm;rate=16000", description="Audio format")
+
+
+# OAuth and Authentication models
+class UserInfo(BaseModel):
+    """Google user information from OAuth"""
+    id: str = Field(..., description="Google user ID")
+    email: str = Field(..., description="User's email address")
+    name: Optional[str] = Field(None, description="User's display name")
+    picture: Optional[str] = Field(None, description="User's profile picture URL")
+    verified_email: bool = Field(default=False, description="Whether email is verified")
+
+
+class OAuthTokens(BaseModel):
+    """OAuth tokens for a user"""
+    access_token: str = Field(..., description="Access token for API calls")
+    refresh_token: Optional[str] = Field(None, description="Refresh token for token renewal")
+    token_type: str = Field(default="Bearer", description="Token type")
+    expires_at: Optional[datetime] = Field(None, description="Token expiration time")
+    scopes: List[str] = Field(default_factory=list, description="Granted OAuth scopes")
+
+
+class AuthStatus(str, Enum):
+    """Authentication status"""
+    AUTHENTICATED = "authenticated"
+    UNAUTHENTICATED = "unauthenticated"
+    EXPIRED = "expired"
+    ERROR = "error"
+
+
+# OAuth API Request/Response models
+class LoginRequest(BaseModel):
+    """Request to initiate OAuth login"""
+    redirect_uri: Optional[str] = Field(None, description="Custom redirect URI")
+    state: Optional[str] = Field(None, description="State parameter for CSRF protection")
+
+
+class LoginResponse(BaseModel):
+    """Response containing OAuth authorization URL"""
+    authorization_url: str = Field(..., description="URL to redirect user for OAuth consent")
+    state: str = Field(..., description="State parameter for CSRF protection")
+
+
+class CallbackRequest(BaseModel):
+    """OAuth callback request with authorization code"""
+    code: str = Field(..., description="Authorization code from Google")
+    state: Optional[str] = Field(None, description="State parameter for verification")
+    error: Optional[str] = Field(None, description="Error from OAuth provider")
+
+
+class AuthStatusResponse(BaseModel):
+    """Authentication status response"""
+    status: AuthStatus = Field(..., description="Current authentication status")
+    user: Optional[UserInfo] = Field(None, description="User information if authenticated")
+    expires_at: Optional[datetime] = Field(None, description="Token expiration time")
+    scopes: List[str] = Field(default_factory=list, description="Granted OAuth scopes")
+
+
+class LogoutResponse(BaseModel):
+    """Logout response"""
+    success: bool = Field(default=True, description="Whether logout was successful")
+    message: str = Field(default="Successfully logged out", description="Logout message")
+
+
+# Enhanced session models with authentication
+class AuthenticatedSessionConfig(SessionConfig):
+    """Session configuration with authentication context"""
+    user_id: str = Field(..., description="Authenticated user ID")
+    access_token: str = Field(..., description="User's access token for Gmail API")
+
+
+class AuthenticatedStartSessionMessage(StartSessionMessage):
+    """Start session message with authentication"""
+    user_id: Optional[str] = Field(None, description="User ID for authenticated sessions")
+    access_token: Optional[str] = Field(None, description="Access token for Gmail API")
 
 
 # Union types for message parsing

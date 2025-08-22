@@ -9,9 +9,10 @@ import time
 from typing import Dict, Any, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Import our extracted services
 from email_service import EmailManager, initialize_email_manager, extract_email_details
@@ -23,8 +24,11 @@ from audio_bridge import WebSocketAudioBridge, create_gemini_session_with_websoc
 from models import (
     HealthCheckResponse, SessionInfoResponse, SessionConfig, SessionStatus,
     create_error_message, create_session_status_message, parse_websocket_message,
-    MessageType
+    MessageType, LoginRequest, LoginResponse, CallbackRequest, AuthStatusResponse, 
+    LogoutResponse, UserInfo, OAuthTokens
 )
+from oauth_service import get_oauth_service
+from user_session import get_session_manager, shutdown_session_manager
 
 # Global state for the application
 class AppState:
@@ -75,6 +79,7 @@ async def lifespan(app: FastAPI):
         print("🧹 Cleaning up resources...")
         if app_state.mcp_app or app_state.gmail_agent:
             await cleanup_mcp_resources(app_state.mcp_app, app_state.gmail_agent)
+        await shutdown_session_manager()
         print("👋 Server shutdown complete")
 
 
@@ -144,6 +149,171 @@ async def get_session_status():
         progress=app_state.current_session.get("progress"),
         started_at=app_state.current_session.get("started_at")
     )
+
+
+# OAuth Authentication Endpoints
+security = HTTPBearer(auto_error=False)
+
+
+async def get_current_session(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[str]:
+    """
+    Extract session ID from Authorization header
+    Returns session ID if valid, None otherwise
+    """
+    if not credentials:
+        return None
+    
+    # Session ID is passed as Bearer token
+    return credentials.credentials
+
+
+@app.post("/auth/login", response_model=LoginResponse)
+async def login(request: LoginRequest):
+    """
+    Initiate OAuth login flow
+    Returns authorization URL for user to visit
+    """
+    try:
+        oauth_service = get_oauth_service()
+        
+        # Use default redirect URI if not provided
+        redirect_uri = request.redirect_uri or "http://localhost:3000/auth/callback"
+        
+        login_response = oauth_service.generate_authorization_url(
+            redirect_uri=redirect_uri,
+            state=request.state
+        )
+        
+        return login_response
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to initiate login: {str(e)}")
+
+
+@app.post("/auth/callback")
+async def oauth_callback(request: CallbackRequest):
+    """
+    Handle OAuth callback from Google
+    Exchange authorization code for tokens and create user session
+    """
+    try:
+        if request.error:
+            raise HTTPException(status_code=400, detail=f"OAuth error: {request.error}")
+        
+        if not request.code:
+            raise HTTPException(status_code=400, detail="Authorization code required")
+        
+        oauth_service = get_oauth_service()
+        session_manager = get_session_manager()
+        
+        # Exchange code for tokens
+        redirect_uri = "http://localhost:3000/auth/callback"  # Should match frontend
+        tokens, user_info = oauth_service.exchange_code_for_tokens(
+            code=request.code,
+            redirect_uri=redirect_uri,
+            state=request.state
+        )
+        
+        # Create user session
+        session_id = await session_manager.create_session(tokens, user_info)
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "user": user_info.dict(),
+            "expires_at": tokens.expires_at.isoformat() if tokens.expires_at else None
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"OAuth callback failed: {str(e)}")
+
+
+@app.get("/auth/status", response_model=AuthStatusResponse)
+async def get_auth_status(session_id: Optional[str] = Depends(get_current_session)):
+    """
+    Check authentication status for current session
+    """
+    if not session_id:
+        return AuthStatusResponse(
+            status="unauthenticated",
+            user=None,
+            expires_at=None,
+            scopes=[]
+        )
+    
+    try:
+        session_manager = get_session_manager()
+        auth_status = await session_manager.validate_session(session_id)
+        return auth_status
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to check auth status: {str(e)}")
+
+
+@app.post("/auth/logout", response_model=LogoutResponse)
+async def logout(session_id: Optional[str] = Depends(get_current_session)):
+    """
+    Logout user and revoke tokens
+    """
+    if not session_id:
+        return LogoutResponse(success=True, message="No active session")
+    
+    try:
+        session_manager = get_session_manager()
+        success = await session_manager.logout_session(session_id, revoke_tokens=True)
+        
+        return LogoutResponse(
+            success=success,
+            message="Successfully logged out" if success else "Logout failed"
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Logout failed: {str(e)}")
+
+
+@app.get("/auth/user")
+async def get_user_info(session_id: Optional[str] = Depends(get_current_session)):
+    """
+    Get current authenticated user information
+    """
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        session_manager = get_session_manager()
+        session = await session_manager.get_session(session_id)
+        
+        if not session:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        
+        return {
+            "user": session.user_info.dict(),
+            "session_id": session_id,
+            "expires_at": session.tokens.expires_at.isoformat() if session.tokens.expires_at else None,
+            "scopes": session.tokens.scopes
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get user info: {str(e)}")
+
+
+@app.get("/auth/sessions")
+async def get_active_sessions():
+    """
+    Get information about active sessions (for debugging/monitoring)
+    """
+    try:
+        session_manager = get_session_manager()
+        
+        return {
+            "active_sessions": session_manager.get_active_sessions_count(),
+            "active_users": list(session_manager.get_active_users())
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get session info: {str(e)}")
 
 
 @app.websocket("/ws/voice-session")
