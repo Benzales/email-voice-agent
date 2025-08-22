@@ -66,10 +66,10 @@ A voice-driven Gmail assistant that helps users clear their inbox through natura
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## 🔐 OAuth Authentication System
+## 🔐 OAuth Authentication & Security System
 
-### Multi-User Authentication Flow
-The application supports secure OAuth 2.0 authentication allowing multiple users to access their personal Gmail accounts through the voice interface.
+### Multi-User Authentication Flow with Security Protection
+The application supports secure OAuth 2.0 authentication allowing multiple users to access their personal Gmail accounts through the voice interface. **All expensive operations (WebSocket/Gemini Live API) require proper authentication to prevent unauthorized cost abuse.**
 
 #### **Authentication Architecture**
 ```
@@ -329,18 +329,29 @@ fastapi_server.py (Orchestration + OAuth Endpoints)
 
 ### WebSocket Communication Protocol
 
+#### **🔐 Authentication Required**
+All WebSocket connections now require valid OAuth session authentication:
+```typescript
+// WebSocket Connection (AUTHENTICATION REQUIRED)
+ws://localhost:8000/ws/voice-session?session_id=YOUR_OAUTH_SESSION_ID
+
+// Connection rejected with HTTP 403 if:
+// - No session_id provided
+// - Invalid/expired session_id
+// - Session not authenticated
+```
+
 #### **Frontend → Backend Messages**
 ```typescript
-// Raw audio data (48kHz PCM)
+// Raw audio data (48kHz PCM) - Only after authentication
 WebSocket.send(audioBytes)
 
-// Session control (OAuth-aware)
+// Session control (Authenticated users only)
 { 
   type: "start_session", 
   email_query: "in:inbox", 
-  max_results: 50,
-  user_id: "google_user_id",      // OAuth user identification
-  access_token: "oauth_token"     // User's Gmail access token
+  max_results: 50
+  // Note: user_id and access_token now handled via session validation
 }
 { type: "stop_session", reason: "user_requested" }
 { type: "ping" } // Keepalive
@@ -363,15 +374,21 @@ WebSocket.send(audioBytes)
 { type: "audio_interrupted" } // Clear audio queue
 ```
 
-#### **OAuth REST API Endpoints**
+#### **🔐 Secured REST API Endpoints**
 ```typescript
-// Authentication Flow
+// Authentication Flow (Public endpoints)
 POST /auth/login          → Generate OAuth authorization URL
 GET  /auth/callback       → Handle Google OAuth callback
-GET  /auth/status         → Check current authentication status
-POST /auth/logout         → Logout and revoke tokens
-GET  /auth/user          → Get authenticated user information
 
+// Protected Endpoints (Require Bearer token authentication)
+GET  /auth/status         → Check current authentication status (🔐 AUTH REQUIRED)
+POST /auth/logout         → Logout and revoke tokens (🔐 AUTH REQUIRED)
+GET  /auth/user          → Get authenticated user information (🔐 AUTH REQUIRED)
+GET  /session/status     → Get voice session status (🔐 AUTH REQUIRED)
+
+// Removed for Security (404 Not Found)
+// GET  /auth/sessions   → REMOVED - Admin endpoint security risk
+// GET  /ws/test-audio   → REMOVED - Debug endpoint not needed in production
 
 // Example OAuth Flow:
 POST /auth/login { redirect_uri?: string }
@@ -382,6 +399,56 @@ GET /auth/callback?code=...&state=...
 
 GET /auth/status (Authorization: Bearer session_id)
 → { status: "authenticated", user: {...}, expires_at: "...", scopes: [...] }
+```
+
+## 🛡️ Security Implementation
+
+### Production Security Features
+The application implements comprehensive security measures to prevent unauthorized access and cost abuse:
+
+#### **🔐 Authentication Requirements**
+- **WebSocket Endpoint**: Requires valid `session_id` query parameter
+- **Protected HTTP Endpoints**: Require `Authorization: Bearer {session_id}` header
+- **Session Validation**: All sessions validated against OAuth tokens before access
+- **Cost Protection**: Expensive Gemini Live API operations blocked for unauthorized users
+
+#### **🚫 Removed Vulnerable Endpoints**
+- **`/auth/sessions`**: Admin endpoint removed (privacy/security risk)
+- **`/ws/test-audio`**: Debug endpoint removed (unnecessary attack surface)
+
+#### **✅ Security Testing Results**
+- Unauthorized WebSocket connections → **403 Forbidden**
+- Missing authentication headers → **401 Unauthorized** 
+- Invalid session IDs → **403 Forbidden**
+- Admin endpoints → **404 Not Found**
+
+#### **🎯 Security Architecture**
+```typescript
+// Frontend Authentication Integration
+const [authState] = useAuth();
+const [sessionState, sessionControls] = useVoiceSession(
+  wsUrl, 
+  authState.sessionId  // 🔐 Session ID passed for authentication
+);
+
+// WebSocket URL Construction
+const authenticatedWsUrl = sessionId 
+  ? `${wsUrl}?session_id=${sessionId}`  // 🔐 Authenticated connection
+  : wsUrl;  // ❌ Will be rejected
+
+// Backend Authentication Validation
+async function websocket_voice_session(
+  websocket: WebSocket,
+  session_id: str = Query(..., description="OAuth session ID required")
+) {
+  // 🔐 Validate session before accepting WebSocket
+  auth_status = await session_manager.validate_session(session_id);
+  if auth_status.status != AuthStatus.AUTHENTICATED:
+    await websocket.close(code=4001, reason="Authentication required");
+    return;
+  
+  await websocket.accept();  // ✅ Authenticated connection established
+}
 ```
 
 ## 🎤 Voice Command Processing
@@ -543,13 +610,23 @@ Gemini: "I've deleted that email."
 - ✅ **Error handling**: Comprehensive error recovery and auth state management
 - ✅ **Production ready**: Deployable to Vercel + Railway/Render with OAuth
 
-### OAuth & Security Features
+### 🛡️ **Production Security Features**
+- ✅ **WebSocket Authentication**: All expensive operations require valid OAuth session
+- ✅ **Endpoint Protection**: HTTP endpoints secured with Bearer token authentication
+- ✅ **Cost Abuse Prevention**: Unauthorized access to Gemini Live API blocked
+- ✅ **Vulnerability Removal**: Admin and debug endpoints removed for production
+- ✅ **Session Validation**: Real-time OAuth token validation before API access
+- ✅ **Security Testing**: Comprehensive testing confirms all attack vectors blocked
+- ✅ **Frontend Integration**: Seamless authentication between frontend and backend
+
+### OAuth & Security Architecture
 - ✅ **Google OAuth 2.0**: Complete authorization flow with CSRF protection
 - ✅ **Token management**: Automatic refresh, validation, and revocation
 - ✅ **Session security**: Secure session storage with 24-hour expiry
 - ✅ **Multi-user isolation**: Each user's Gmail access completely isolated
 - ✅ **Scope management**: Proper Gmail permissions and user consent
 - ✅ **Authentication guards**: Protected routes and conditional rendering
+- ✅ **Cost protection**: Prevents unauthorized expensive API operations
 
 ### Performance Optimizations
 - ✅ **Audio quality**: Native 48kHz without interpolation artifacts
@@ -557,5 +634,6 @@ Gemini: "I've deleted that email."
 - ✅ **Efficient streaming**: Batched audio processing
 - ✅ **Resource management**: Proper cleanup and monitoring
 - ✅ **Authentication efficiency**: Optimized auth checks and token refresh
+- ✅ **Security performance**: Fast session validation without blocking UX
 
-The web-based voice email agent now provides enterprise-grade OAuth authentication while maintaining the streamlined voice-first user experience. Multiple users can securely access their personal Gmail accounts through natural voice commands.
+The web-based voice email agent now provides **enterprise-grade security** with OAuth authentication protecting all expensive operations, while maintaining the streamlined voice-first user experience. Multiple users can securely access their personal Gmail accounts through natural voice commands **without risk of unauthorized cost abuse**.
