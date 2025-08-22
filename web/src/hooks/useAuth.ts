@@ -154,7 +154,7 @@ export function useAuth(): [AuthState, AuthOperations] {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          redirect_uri: `${window.location.origin}/auth/callback`
+          redirect_uri: `${BACKEND_URL}/auth/callback`
         }),
       });
 
@@ -235,10 +235,18 @@ export function useAuth(): [AuthState, AuthOperations] {
     await checkAuthStatus(sessionId);
   }, [storeSessionId, checkAuthStatus]);
 
-  // Check authentication status on mount and when sessionId changes
+  // Check authentication status on mount only
   useEffect(() => {
-    checkAuthStatus();
-  }, [checkAuthStatus]);
+    const initialCheck = async () => {
+      const sessionId = getStoredSessionId();
+      if (sessionId) {
+        await checkAuthStatus(sessionId);
+      } else {
+        updateAuthState({ isLoading: false });
+      }
+    };
+    initialCheck();
+  }, []); // Empty dependency array to run only once
 
   // Set up periodic token refresh
   useEffect(() => {

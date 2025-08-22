@@ -3,7 +3,7 @@
  * Combines audio processing and WebSocket communication
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { AudioProcessor } from '@/lib/audio/audioUtils';
 import { VoiceWebSocketClient, createVoiceWebSocketClient, SessionStatus } from '@/lib/websocket/client';
 
@@ -266,12 +266,12 @@ export function useVoiceSession(backendUrl?: string): [VoiceSessionState, VoiceS
     };
   }, [state.isRecording, state.isConnected, stopSession]);
 
-  const controls: VoiceSessionControls = {
+  const controls: VoiceSessionControls = useMemo(() => ({
     connect,
     disconnect,
     startSession,
     stopSession
-  };
+  }), [connect, disconnect, startSession, stopSession]);
 
   return [state, controls];
 }

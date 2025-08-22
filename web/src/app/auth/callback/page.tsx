@@ -28,10 +28,15 @@ export default function OAuthCallbackPage() {
 
   useEffect(() => {
     const handleOAuthCallback = async () => {
+      // Prevent multiple executions
+      if (callbackState.status !== 'processing') {
+        return;
+      }
+
       try {
         // Extract parameters from URL
-        const code = searchParams.get('code');
-        const state = searchParams.get('state');
+        const sessionId = searchParams.get('session_id');
+        const success = searchParams.get('success');
         const error = searchParams.get('error');
 
         // Handle OAuth error
@@ -39,83 +44,45 @@ export default function OAuthCallbackPage() {
           setCallbackState({
             status: 'error',
             message: 'Authentication failed',
-            error: `Google OAuth error: ${error}`
+            error: `OAuth error: ${error}`
           });
           return;
         }
 
-        // Validate required parameters
-        if (!code) {
+        // Check if we have session info from backend redirect
+        if (success === 'true' && sessionId) {
           setCallbackState({
-            status: 'error',
-            message: 'Authentication failed',
-            error: 'No authorization code received from Google'
+            status: 'processing',
+            message: 'Authentication successful! Setting up session...'
           });
-          return;
-        }
 
-        // Verify state parameter (CSRF protection)
-        const storedState = sessionStorage.getItem('oauth_state');
-        if (state && storedState && state !== storedState) {
+          // Clean up OAuth state
+          sessionStorage.removeItem('oauth_state');
+
+          // Use the auth hook to handle the callback
+          if ((authOperations as any).handleOAuthCallback) {
+            await (authOperations as any).handleOAuthCallback(sessionId);
+          }
+
           setCallbackState({
-            status: 'error',
-            message: 'Authentication failed',
-            error: 'Invalid state parameter - possible CSRF attack'
+            status: 'success',
+            message: 'Welcome! Authentication complete.'
           });
+
+          // Redirect to main app after successful authentication
+          setTimeout(() => {
+            router.push('/');
+          }, 2000);
+          
           return;
         }
 
-        // Exchange authorization code for session
+        // If no session info, this might be an error case
         setCallbackState({
-          status: 'processing',
-          message: 'Exchanging authorization code...'
+          status: 'error',
+          message: 'Authentication failed',
+          error: 'No session information received from OAuth callback'
         });
-
-        const response = await fetch(`${BACKEND_URL}/auth/callback`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            code,
-            state: state || undefined,
-          }),
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || 'Failed to exchange authorization code');
-        }
-
-        const data = await response.json();
-
-        if (!data.success || !data.session_id) {
-          throw new Error('Invalid response from authentication server');
-        }
-
-        // Store session and update auth state
-        setCallbackState({
-          status: 'processing',
-          message: 'Authentication successful! Redirecting...'
-        });
-
-        // Clean up OAuth state
-        sessionStorage.removeItem('oauth_state');
-
-        // Use the auth hook to handle the callback
-        if ((authOperations as any).handleOAuthCallback) {
-          await (authOperations as any).handleOAuthCallback(data.session_id);
-        }
-
-        setCallbackState({
-          status: 'success',
-          message: `Welcome, ${data.user?.name || data.user?.email || 'User'}!`
-        });
-
-        // Redirect to main app after successful authentication
-        setTimeout(() => {
-          router.push('/');
-        }, 2000);
 
       } catch (error) {
         console.error('OAuth callback error:', error);
@@ -128,7 +95,7 @@ export default function OAuthCallbackPage() {
     };
 
     handleOAuthCallback();
-  }, [searchParams, router, authOperations]);
+  }, [searchParams, router, authOperations, callbackState.status]);
 
   // Auto-retry on error after delay
   useEffect(() => {

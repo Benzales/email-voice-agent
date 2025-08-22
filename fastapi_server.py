@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Import our extracted services
@@ -176,8 +176,8 @@ async def login(request: LoginRequest):
     try:
         oauth_service = get_oauth_service()
         
-        # Use default redirect URI if not provided
-        redirect_uri = request.redirect_uri or "http://localhost:3000/auth/callback"
+        # Use backend callback URL instead of frontend
+        redirect_uri = request.redirect_uri or "http://localhost:8000/auth/callback"
         
         login_response = oauth_service.generate_authorization_url(
             redirect_uri=redirect_uri,
@@ -190,39 +190,40 @@ async def login(request: LoginRequest):
         raise HTTPException(status_code=500, detail=f"Failed to initiate login: {str(e)}")
 
 
-@app.post("/auth/callback")
-async def oauth_callback(request: CallbackRequest):
+@app.get("/auth/callback")
+async def oauth_callback(
+    code: str = None,
+    state: str = None,
+    error: str = None
+):
     """
     Handle OAuth callback from Google
     Exchange authorization code for tokens and create user session
     """
     try:
-        if request.error:
-            raise HTTPException(status_code=400, detail=f"OAuth error: {request.error}")
+        if error:
+            raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
         
-        if not request.code:
+        if not code:
             raise HTTPException(status_code=400, detail="Authorization code required")
         
         oauth_service = get_oauth_service()
         session_manager = get_session_manager()
         
-        # Exchange code for tokens
-        redirect_uri = "http://localhost:3000/auth/callback"  # Should match frontend
+        # Exchange code for tokens  
+        redirect_uri = "http://localhost:8000/auth/callback"  # Should match what was used in login
         tokens, user_info = oauth_service.exchange_code_for_tokens(
-            code=request.code,
+            code=code,
             redirect_uri=redirect_uri,
-            state=request.state
+            state=state
         )
         
         # Create user session
         session_id = await session_manager.create_session(tokens, user_info)
         
-        return {
-            "success": True,
-            "session_id": session_id,
-            "user": user_info.dict(),
-            "expires_at": tokens.expires_at.isoformat() if tokens.expires_at else None
-        }
+        # Redirect to frontend with session info
+        frontend_url = f"http://localhost:3000/auth/callback?session_id={session_id}&success=true"
+        return RedirectResponse(url=frontend_url, status_code=302)
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OAuth callback failed: {str(e)}")

@@ -161,7 +161,7 @@ export function CompactAuthButton({ className = '' }: { className?: string }) {
  * User Profile Display Component
  */
 export function UserProfile({ className = '' }: { className?: string }) {
-  const [authState] = useAuth();
+  const [authState, authOperations] = useAuth();
 
   if (!authState.isAuthenticated || !authState.user) {
     return null;
@@ -193,6 +193,15 @@ export function UserProfile({ className = '' }: { className?: string }) {
             </div>
           )}
         </div>
+        
+        {/* Sign Out Button */}
+        <button
+          onClick={authOperations.logout}
+          disabled={authState.isLoading}
+          className="bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors duration-200"
+        >
+          Sign Out
+        </button>
       </div>
       
       {expiresAt && (
