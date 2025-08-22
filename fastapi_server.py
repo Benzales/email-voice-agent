@@ -9,7 +9,7 @@ import time
 from typing import Dict, Any, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -25,7 +25,7 @@ from models import (
     HealthCheckResponse, SessionInfoResponse, SessionConfig, SessionStatus,
     create_error_message, create_session_status_message, parse_websocket_message,
     MessageType, LoginRequest, LoginResponse, CallbackRequest, AuthStatusResponse, 
-    LogoutResponse, UserInfo, OAuthTokens
+    LogoutResponse, UserInfo, OAuthTokens, AuthStatus
 )
 from oauth_service import get_oauth_service
 from user_session import get_session_manager, shutdown_session_manager
@@ -133,9 +133,37 @@ async def health_check():
     )
 
 
+# OAuth Authentication Helper
+security = HTTPBearer(auto_error=False)
+
+async def get_current_session(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[str]:
+    """
+    Extract session ID from Authorization header
+    Returns session ID if valid, None otherwise
+    """
+    if not credentials:
+        return None
+    
+    # Session ID is passed as Bearer token
+    return credentials.credentials
+
+
 @app.get("/session/status", response_model=SessionInfoResponse)
-async def get_session_status():
-    """Get current session status"""
+async def get_session_status(session_id: Optional[str] = Depends(get_current_session)):
+    """Get current session status - requires authentication"""
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    # Validate session
+    try:
+        session_manager = get_session_manager()
+        auth_status = await session_manager.validate_session(session_id)
+        
+        if auth_status.status != AuthStatus.AUTHENTICATED:
+            raise HTTPException(status_code=401, detail="Invalid session")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Authentication failed")
+    
     if not app_state.current_session:
         return SessionInfoResponse(
             active=False,
@@ -152,21 +180,6 @@ async def get_session_status():
 
 
 # OAuth Authentication Endpoints
-security = HTTPBearer(auto_error=False)
-
-
-async def get_current_session(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[str]:
-    """
-    Extract session ID from Authorization header
-    Returns session ID if valid, None otherwise
-    """
-    if not credentials:
-        return None
-    
-    # Session ID is passed as Bearer token
-    return credentials.credentials
-
-
 @app.post("/auth/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
     """
@@ -300,31 +313,38 @@ async def get_user_info(session_id: Optional[str] = Depends(get_current_session)
         raise HTTPException(status_code=500, detail=f"Failed to get user info: {str(e)}")
 
 
-@app.get("/auth/sessions")
-async def get_active_sessions():
-    """
-    Get information about active sessions (for debugging/monitoring)
-    """
-    try:
-        session_manager = get_session_manager()
-        
-        return {
-            "active_sessions": session_manager.get_active_sessions_count(),
-            "active_users": list(session_manager.get_active_users())
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get session info: {str(e)}")
+# Removed /auth/sessions endpoint - security risk in production
 
 
 @app.websocket("/ws/voice-session")
-async def websocket_voice_session(websocket: WebSocket):
+async def websocket_voice_session(
+    websocket: WebSocket,
+    session_id: str = Query(..., description="OAuth session ID required for authentication")
+):
     """
     Main WebSocket endpoint for voice-driven email processing
     Handles the complete email processing workflow with audio streaming
+    Requires valid OAuth session for authentication
     """
+    # Validate session before accepting WebSocket connection
+    try:
+        session_manager = get_session_manager()
+        auth_status = await session_manager.validate_session(session_id)
+        
+        if auth_status.status != AuthStatus.AUTHENTICATED:
+            print(f"🚫 WebSocket authentication failed: {auth_status.status}")
+            await websocket.close(code=4001, reason="Authentication required")
+            return
+            
+        print(f"🔐 WebSocket authenticated for user: {auth_status.user.email if auth_status.user else 'Unknown'}")
+        
+    except Exception as e:
+        print(f"🚫 WebSocket authentication error: {e}")
+        await websocket.close(code=4001, reason="Authentication failed")
+        return
+    
     await websocket.accept()
-    print("🔌 WebSocket connected")
+    print(f"🔌 WebSocket connected (authenticated: {auth_status.user.email if auth_status.user else 'Unknown'})")
     
     if not app_state.is_initialized:
         await websocket.send_text(json.dumps(
@@ -530,39 +550,7 @@ async def process_single_email_websocket(
         return False
 
 
-@app.websocket("/ws/test-audio")
-async def websocket_test_audio(websocket: WebSocket):
-    """
-    Test WebSocket endpoint for audio streaming validation
-    Useful for debugging audio pipeline without full email processing
-    """
-    await websocket.accept()
-    print("🎵 Audio test WebSocket connected")
-    
-    try:
-        while True:
-            # Wait for audio data
-            message = await websocket.receive()
-            
-            if message["type"] == "websocket.receive":
-                if "bytes" in message:
-                    # Echo audio data back
-                    audio_data = message["bytes"]
-                    print(f"🎵 Received audio chunk: {len(audio_data)} bytes")
-                    await websocket.send_bytes(audio_data)  # Echo back
-                elif "text" in message:
-                    # Handle control messages
-                    try:
-                        data = json.loads(message["text"])
-                        print(f"🎵 Received control message: {data}")
-                        await websocket.send_text(json.dumps({"status": "received", "data": data}))
-                    except json.JSONDecodeError:
-                        pass
-    
-    except WebSocketDisconnect:
-        print("🎵 Audio test WebSocket disconnected")
-    except Exception as e:
-        print(f"❌ Audio test error: {e}")
+# Removed /ws/test-audio endpoint - not needed in production
 
 
 if __name__ == "__main__":

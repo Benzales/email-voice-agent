@@ -17,14 +17,14 @@ interface VoiceEmailAgentProps {
 
 export default function VoiceEmailAgent({ backendUrl }: VoiceEmailAgentProps) {
   const wsUrl = backendUrl || process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost:8000/ws/voice-session';
-  const [sessionState, sessionControls] = useVoiceSession(wsUrl);
   const [authState] = useAuth();
+  const [sessionState, sessionControls] = useVoiceSession(wsUrl, authState.sessionId || undefined);
   const [isStarting, setIsStarting] = useState(false);
 
   // Auto-connect on component mount (only if authenticated)
   useEffect(() => {
     const autoConnect = async () => {
-      if (authState.isAuthenticated && !sessionState.isConnected && sessionState.sessionStatus === 'idle') {
+      if (authState.isAuthenticated && authState.sessionId && !sessionState.isConnected && sessionState.sessionStatus === 'idle') {
         try {
           await sessionControls.connect();
         } catch (error) {
@@ -34,7 +34,7 @@ export default function VoiceEmailAgent({ backendUrl }: VoiceEmailAgentProps) {
     };
     
     autoConnect();
-  }, [authState.isAuthenticated, sessionState.isConnected, sessionState.sessionStatus, sessionControls]);
+  }, [authState.isAuthenticated, authState.sessionId, sessionState.isConnected, sessionState.sessionStatus, sessionControls]);
 
   const handleClearInbox = async () => {
     setIsStarting(true);

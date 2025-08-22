@@ -27,7 +27,7 @@ export interface VoiceSessionControls {
   stopSession: () => void;
 }
 
-export function useVoiceSession(backendUrl?: string): [VoiceSessionState, VoiceSessionControls] {
+export function useVoiceSession(backendUrl?: string, sessionId?: string): [VoiceSessionState, VoiceSessionControls] {
   const [state, setState] = useState<VoiceSessionState>({
     isConnected: false,
     isRecording: false,
@@ -71,8 +71,11 @@ export function useVoiceSession(backendUrl?: string): [VoiceSessionState, VoiceS
       // Initialize audio first
       await initializeAudio();
 
-      // Create WebSocket client
-      wsClientRef.current = createVoiceWebSocketClient(backendUrl, {
+      // Create WebSocket client with session authentication
+      const wsUrl = backendUrl || 'ws://localhost:8000/ws/voice-session';
+      const authenticatedWsUrl = sessionId ? `${wsUrl}?session_id=${sessionId}` : wsUrl;
+      
+      wsClientRef.current = createVoiceWebSocketClient(authenticatedWsUrl, {
         onConnect: () => {
           updateState({
             isConnected: true,
@@ -130,7 +133,7 @@ export function useVoiceSession(backendUrl?: string): [VoiceSessionState, VoiceS
       });
       throw error;
     }
-  }, [backendUrl, initializeAudio, updateState]);
+  }, [backendUrl, sessionId, initializeAudio, updateState]);
 
   /**
    * Disconnect from the backend

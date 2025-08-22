@@ -371,7 +371,7 @@ GET  /auth/callback       → Handle Google OAuth callback
 GET  /auth/status         → Check current authentication status
 POST /auth/logout         → Logout and revoke tokens
 GET  /auth/user          → Get authenticated user information
-GET  /auth/sessions      → Monitor active sessions (admin)
+
 
 // Example OAuth Flow:
 POST /auth/login { redirect_uri?: string }
