@@ -16,11 +16,11 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Import our extracted services
 from email_service import EmailManager, initialize_email_manager, extract_email_details
-from gemini_service import (
-    setup_mcp_connection, discover_gmail_tools, convert_mcp_to_gemini_tools,
-    create_navigation_tools, create_gemini_session_config, cleanup_mcp_resources
+from openai_service import (
+    setup_mcp_connection, discover_gmail_tools, convert_mcp_to_openai_tools,
+    create_navigation_tools, create_openai_session_config, cleanup_mcp_resources
 )
-from audio_bridge import WebSocketAudioBridge, create_gemini_session_with_websocket
+from openai_audio_bridge import OpenAIAudioBridge, create_openai_session_with_websocket
 from models import (
     HealthCheckResponse, SessionInfoResponse, SessionConfig, SessionStatus,
     create_error_message, create_session_status_message, parse_websocket_message,
@@ -35,7 +35,7 @@ class AppState:
     def __init__(self):
         self.mcp_app = None
         self.gmail_agent = None
-        self.gemini_tools = []
+        self.openai_tools = []  # Changed from gemini_tools to openai_tools
         self.current_session: Optional[Dict[str, Any]] = None
         self.is_initialized = False
         
@@ -53,20 +53,20 @@ async def lifespan(app: FastAPI):
     FastAPI lifespan manager - handles startup and shutdown
     Initializes MCP connections on startup and cleans up on shutdown
     """
-    print("🚀 Starting Email Voice Agent FastAPI Server...")
+    print("🚀 Starting Email Voice Agent FastAPI Server with OpenAI...")
     
     try:
-        # Initialize MCP and Gmail agent
+        # Initialize MCP and Gmail agent (same as before, no Gemini dependency)
         print("📡 Initializing MCP connection...")
         app_state.mcp_app, app_state.gmail_agent = await setup_mcp_connection()
         
-        # Discover and convert tools
+        # Discover and convert tools to OpenAI format
         print("🔧 Discovering Gmail tools...")
         mcp_tools = await discover_gmail_tools(app_state.gmail_agent)
-        app_state.gemini_tools = convert_mcp_to_gemini_tools(mcp_tools)
+        app_state.openai_tools = convert_mcp_to_openai_tools(mcp_tools)  # Changed to openai_tools
         
         app_state.is_initialized = True
-        print(f"✅ Server initialized with {len(app_state.gemini_tools)} Gmail tools")
+        print(f"✅ Server initialized with {len(app_state.openai_tools)} Gmail tools for OpenAI")
         
         yield  # Server is running
         
@@ -407,24 +407,21 @@ async def websocket_voice_session(
         # Create navigation tools
         nav_tools = create_navigation_tools(email_manager)
         
-        # Add custom complete_current_email tool to gemini_tools
+        # Add custom complete_current_email tool to openai_tools
         complete_current_email_tool = nav_tools.get_complete_current_email_tool()
-        gemini_tools_with_nav = app_state.gemini_tools + [complete_current_email_tool]
+        openai_tools_with_nav = app_state.openai_tools + [complete_current_email_tool]
         
-        # Create Gemini session configuration
-        gemini_session_config = create_gemini_session_config(gemini_tools_with_nav)
-        print(f"🔧 Gemini session config has {len(gemini_session_config['tools'])} tools:")
-        for i, tool in enumerate(gemini_session_config['tools']):
+        # Create OpenAI session configuration
+        openai_session_config = create_openai_session_config(openai_tools_with_nav)
+        print(f"🔧 OpenAI session config has {len(openai_session_config['tools'])} tools:")
+        for i, tool in enumerate(openai_session_config['tools']):
             try:
-                # Handle different tool object types
-                if hasattr(tool, 'function_declarations'):
-                    if isinstance(tool.function_declarations, list):
-                        tool_names = [fd.name if hasattr(fd, 'name') else fd.get('name', 'unknown') for fd in tool.function_declarations]
-                    else:
-                        tool_names = [tool.function_declarations.name if hasattr(tool.function_declarations, 'name') else 'unknown']
+                # Handle OpenAI Realtime API tool format
+                if isinstance(tool, dict):
+                    tool_name = tool.get('name', 'unknown')
+                    print(f"🔧   Tool {i+1}: {tool_name}")
                 else:
-                    tool_names = ['unknown_tool']
-                print(f"🔧   Tool {i+1}: {tool_names}")
+                    print(f"🔧   Tool {i+1}: {tool}")
             except Exception as e:
                 print(f"🔧   Tool {i+1}: Error getting name - {e}")
         
@@ -473,9 +470,9 @@ async def websocket_voice_session(
                 ).dict()
             ))
             
-            # Process single email with Gemini Live + WebSocket audio
+            # Process single email with OpenAI Realtime + WebSocket audio
             session_success = await process_single_email_websocket(
-                websocket, gemini_session_config, email_info, nav_tools
+                websocket, openai_session_config, email_info, nav_tools
             )
             
             if not session_success:
@@ -514,17 +511,17 @@ async def websocket_voice_session(
 
 async def process_single_email_websocket(
     websocket: WebSocket, 
-    gemini_session_config: Dict[str, Any], 
+    openai_session_config: Dict[str, Any], 
     email_info: Dict[str, Any],
     nav_tools
 ) -> bool:
     """
-    Process a single email using WebSocket audio streaming
+    Process a single email using WebSocket audio streaming with OpenAI
     Replaces process_single_email_session from main.py
     
     Args:
         websocket: WebSocket connection
-        gemini_session_config: Gemini session configuration
+        openai_session_config: OpenAI session configuration
         email_info: Current email information
         nav_tools: Navigation tools for session control
         
@@ -535,18 +532,18 @@ async def process_single_email_websocket(
         # Reset navigation tools for new email session
         nav_tools.reset_session_state()
         
-        # Create and run Gemini session with WebSocket audio bridge
-        session_success = await create_gemini_session_with_websocket(
-            gemini_session_config, websocket, email_info
+        # Create and run OpenAI session with WebSocket audio bridge
+        session_success = await create_openai_session_with_websocket(
+            openai_session_config, websocket, email_info
         )
         
         return session_success
         
     except Exception as e:
         print(f"❌ Single email processing error: {e}")
-        await websocket.send_text(json.dumps(
+        await websocket.send_json(
             create_error_message(f"Email processing error: {str(e)}", recoverable=True).dict()
-        ))
+        )
         return False
 
 

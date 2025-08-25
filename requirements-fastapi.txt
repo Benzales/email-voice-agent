@@ -18,8 +18,14 @@ google-api-python-client>=2.108.0
 # Session management
 python-jose[cryptography]>=3.3.0
 
+# OpenAI Realtime API support
+openai>=1.12.0
+
+# Audio processing for resampling (OpenAI uses 24kHz vs Gemini's 48kHz)
+scipy>=1.11.0
+
 # Already in your project (from pyproject.toml):
-# google-genai
+# openai (OpenAI Realtime API)
 # mcp-agent
 # python-dotenv
 # asyncio (built-in)

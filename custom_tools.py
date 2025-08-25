@@ -4,7 +4,6 @@ Custom tools for the voice-driven email agent
 """
 
 from typing import Dict, Any, Optional
-from google.genai import types
 
 class EmailNavigationTools:
     """Custom tools for email navigation"""
@@ -13,19 +12,18 @@ class EmailNavigationTools:
         self.email_manager = email_manager
         self.session_should_end = False
     
-    def get_complete_current_email_tool(self) -> types.Tool:
-        """Create a Gemini tool for completing the current email's processing"""
-        return types.Tool(
-            function_declarations=[{
-                "name": "complete_current_email",
-                "description": "Complete processing of the current email and move to the next one. Call this when the user says 'next', 'skip', or similar navigation commands, or after completing any action on an email (archive, delete, reply, etc.).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }]
-        )
+    def get_complete_current_email_tool(self) -> Dict[str, Any]:
+        """Create an OpenAI Realtime API compatible tool for completing the current email's processing"""
+        return {
+            "type": "function",
+            "name": "complete_current_email",
+            "description": "Complete processing of the current email and move to the next one. Call this when the user says 'next', 'skip', or similar navigation commands, or after completing any action on an email (archive, delete, reply, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
     
     async def execute_complete_current_email(self) -> Dict[str, Any]:
         """Execute the complete current email command"""
