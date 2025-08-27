@@ -5,6 +5,7 @@ Orchestrates extracted components and provides WebSocket interface for frontend
 
 import asyncio
 import json
+import os
 import time
 from typing import Dict, Any, Optional
 from contextlib import asynccontextmanager
