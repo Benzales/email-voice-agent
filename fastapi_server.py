@@ -242,8 +242,9 @@ async def oauth_callback(
         session_id = await session_manager.create_session(tokens, user_info)
         
         # Redirect to frontend with session info
-        frontend_url = f"http://localhost:3000/auth/callback?session_id={session_id}&success=true"
-        return RedirectResponse(url=frontend_url, status_code=302)
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        redirect_url = f"{frontend_url}/auth/callback?session_id={session_id}&success=true"
+        return RedirectResponse(url=redirect_url, status_code=302)
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OAuth callback failed: {str(e)}")
