@@ -8,6 +8,7 @@
 import { useState, useEffect } from 'react';
 import { useVoiceSession } from '@/hooks/useVoiceSession';
 import { useAuth } from '@/hooks/useAuth';
+import { WEBSOCKET_URL } from '@/config/backend';
 import AuthButton, { UserProfile } from './AuthButton';
 import { ConditionalAuth } from './ProtectedRoute';
 
@@ -16,7 +17,7 @@ interface VoiceEmailAgentProps {
 }
 
 export default function VoiceEmailAgent({ backendUrl }: VoiceEmailAgentProps) {
-  const wsUrl = backendUrl || process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost:8000/ws/voice-session';
+  const wsUrl = backendUrl || WEBSOCKET_URL;
   const [authState] = useAuth();
   const [sessionState, sessionControls] = useVoiceSession(wsUrl, authState.sessionId || undefined);
   const [isStarting, setIsStarting] = useState(false);

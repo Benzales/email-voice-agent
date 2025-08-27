@@ -21,6 +21,7 @@ from gemini_service import (
     create_navigation_tools, create_gemini_session_config, cleanup_mcp_resources
 )
 from audio_bridge import WebSocketAudioBridge, create_gemini_session_with_websocket
+from oauth_gmail_tools import create_oauth_gmail_tools, create_oauth_gmail_tool_executor
 from models import (
     HealthCheckResponse, SessionInfoResponse, SessionConfig, SessionStatus,
     create_error_message, create_session_status_message, parse_websocket_message,
@@ -36,6 +37,7 @@ class AppState:
         self.mcp_app = None
         self.gmail_agent = None
         self.gemini_tools = []
+        self.oauth_tool_executor = None  # OAuth Gmail tool executor
         self.current_session: Optional[Dict[str, Any]] = None
         self.is_initialized = False
         
@@ -190,7 +192,9 @@ async def login(request: LoginRequest):
         oauth_service = get_oauth_service()
         
         # Use backend callback URL instead of frontend
-        redirect_uri = request.redirect_uri or "http://localhost:8000/auth/callback"
+        # Use environment variable or fallback to localhost for development
+        default_redirect_uri = oauth_service.redirect_uri or "http://localhost:8000/auth/callback"
+        redirect_uri = request.redirect_uri or default_redirect_uri
         
         login_response = oauth_service.generate_authorization_url(
             redirect_uri=redirect_uri,
@@ -223,8 +227,10 @@ async def oauth_callback(
         oauth_service = get_oauth_service()
         session_manager = get_session_manager()
         
-        # Exchange code for tokens  
-        redirect_uri = "http://localhost:8000/auth/callback"  # Should match what was used in login
+        # Exchange code for tokens - use the same redirect URI that was used in authorization
+        # The frontend always sends https://courier.fly.dev/auth/callback, so use that consistently
+        default_redirect_uri = oauth_service.redirect_uri or "http://localhost:8000/auth/callback"
+        redirect_uri = default_redirect_uri
         tokens, user_info = oauth_service.exchange_code_for_tokens(
             code=code,
             redirect_uri=redirect_uri,
@@ -365,10 +371,24 @@ async def websocket_voice_session(
         
         # Fetch email count without starting processing
         print("📧 Fetching inbox email count...")
-        email_manager = await initialize_email_manager(
-            app_state.gmail_agent, 
+        
+        # Get session and Gmail service for the authenticated session
+        session = await session_manager.get_session(session_id)
+        if not session:
+            raise Exception("Invalid session")
+            
+        gmail_service = await session_manager.get_gmail_service(session_id)
+        if not gmail_service:
+            raise Exception("Failed to get Gmail service for session")
+        
+        # Use OAuth email manager instead of MCP
+        from email_service_oauth import initialize_oauth_email_manager
+        email_manager = await initialize_oauth_email_manager(
+            gmail_service,
+            user_id=session.user_info.id,
             query=session_config.email_query,
-            max_results=session_config.max_results
+            max_results=session_config.max_results,
+            auth_mode="oauth"
         )
         
         if email_manager.is_exhausted():
@@ -407,9 +427,22 @@ async def websocket_voice_session(
         # Create navigation tools
         nav_tools = create_navigation_tools(email_manager)
         
-        # Add custom complete_current_email tool to gemini_tools
-        complete_current_email_tool = nav_tools.get_complete_current_email_tool()
-        gemini_tools_with_nav = app_state.gemini_tools + [complete_current_email_tool]
+        # Create Gmail tools based on authentication mode
+        if gmail_service:
+            # OAuth mode - create OAuth Gmail tools
+            print("🔧 Using OAuth Gmail tools for authenticated session")
+            oauth_gmail_tools = create_oauth_gmail_tools(gmail_service)
+            complete_current_email_tool = nav_tools.get_complete_current_email_tool()
+            gemini_tools_with_nav = oauth_gmail_tools + [complete_current_email_tool]
+            
+            # Store OAuth tool executor for handling tool calls
+            app_state.oauth_tool_executor = create_oauth_gmail_tool_executor(gmail_service)
+        else:
+            # MCP mode - use existing MCP tools
+            print("🔧 Using MCP Gmail tools (fallback mode)")
+            complete_current_email_tool = nav_tools.get_complete_current_email_tool()
+            gemini_tools_with_nav = app_state.gemini_tools + [complete_current_email_tool]
+            app_state.oauth_tool_executor = None
         
         # Create Gemini session configuration
         gemini_session_config = create_gemini_session_config(gemini_tools_with_nav)

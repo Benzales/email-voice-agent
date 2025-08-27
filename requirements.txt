@@ -1,0 +1,33 @@
+# Production requirements for Voice Email Agent Backend
+# Consolidated from pyproject.toml and requirements-fastapi.txt
+
+# FastAPI and server
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+
+# Google APIs and OAuth
+google-genai
+google-api-python-client>=2.108.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+
+# MCP integration
+mcp-agent>=0.1.0
+mcp>=1.0.0
+
+# Authentication and security
+python-jose[cryptography]>=3.3.0
+
+# Environment and configuration
+python-dotenv
+
+# Audio processing
+librosa
+soundfile
+
+# Note: pyaudio removed for Docker - not needed for WebSocket audio streaming
+# Note: Development dependencies excluded for production

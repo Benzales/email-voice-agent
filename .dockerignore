@@ -1,0 +1,97 @@
+# Ignore development and build files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Node.js (frontend) - not needed in backend container
+web/
+node_modules/
+
+# Documentation and evaluation files
+Context Docs/
+evaluation/
+*.md
+LEGAL_SETUP.md
+PRIVACY_POLICY.md
+TERMS_OF_SERVICE.md
+WEB_ARCHITECTURE.md
+FASTAPI_README.md
+GMAIL_OAUTH_IMPLEMENTATION_PLAN.md
+GMAIL_SETUP.md
+SECURITY_IMPLEMENTATION_PLAN.md
+
+# Test files
+test_*.py
+*_test.py
+tests/
+
+# Development scripts
+start_dev.py
+start_server.py
+start_uv_server.py
+
+# Lock files (we use requirements.txt instead)
+uv.lock
+
+# Environment files (secrets should be set via Fly.io secrets)
+.env*
+
+# OAuth credential files (use environment variables instead)
+credentials.json
+client_secret*.json
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Audio files (evaluation data not needed in production)
+*.wav
+*.mp3
+*.m4a

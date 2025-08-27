@@ -33,7 +33,7 @@ interface AuthOperations {
   clearError: () => void;
 }
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+import { BACKEND_URL } from '@/config/backend';
 
 export function useAuth(): [AuthState, AuthOperations] {
   const [authState, setAuthState] = useState<AuthState>({

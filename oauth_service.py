@@ -32,39 +32,56 @@ class OAuthService:
         'openid'  # Add openid scope to match what Google returns
     ]
     
-    def __init__(self, credentials_file: str = "credentials.json"):
+    def __init__(self):
         """
-        Initialize OAuth service with Google credentials
+        Initialize OAuth service with Google credentials from environment variables
         
-        Args:
-            credentials_file: Path to Google OAuth credentials JSON file
+        Required environment variables:
+            GMAIL_CLIENT_ID: Google OAuth client ID
+            GMAIL_CLIENT_SECRET: Google OAuth client secret
+            GMAIL_REDIRECT_URI: OAuth redirect URI
         """
-        self.credentials_file = credentials_file
         self._load_client_config()
         
     def _load_client_config(self):
-        """Load OAuth client configuration from credentials file"""
-        try:
-            with open(self.credentials_file, 'r') as f:
-                client_config = json.load(f)
-                
-            # Extract client info from the credentials file
-            if 'web' in client_config:
-                self.client_config = client_config['web']
-            elif 'installed' in client_config:
-                self.client_config = client_config['installed']
-            else:
-                raise ValueError("Invalid credentials file format")
-                
-            self.client_id = self.client_config['client_id']
-            self.client_secret = self.client_config['client_secret']
+        """Load OAuth client configuration from environment variables only"""
+        # Load required environment variables
+        client_id = os.getenv('GMAIL_CLIENT_ID')
+        client_secret = os.getenv('GMAIL_CLIENT_SECRET')
+        redirect_uri = os.getenv('GMAIL_REDIRECT_URI')
+        
+        # Validate all required environment variables are present
+        missing_vars = []
+        if not client_id:
+            missing_vars.append('GMAIL_CLIENT_ID')
+        if not client_secret:
+            missing_vars.append('GMAIL_CLIENT_SECRET')
+        if not redirect_uri:
+            missing_vars.append('GMAIL_REDIRECT_URI')
             
-            print(f"✅ Loaded OAuth client configuration")
-            
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Credentials file not found: {self.credentials_file}")
-        except Exception as e:
-            raise ValueError(f"Failed to load OAuth credentials: {e}")
+        if missing_vars:
+            raise ValueError(
+                f"Missing required environment variables: {', '.join(missing_vars)}. "
+                f"Please set these in your .env file (development) or Fly.io secrets (production)."
+            )
+        
+        # Set client configuration
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.redirect_uri = redirect_uri
+        
+        # Create client_config in the format expected by Google OAuth library
+        self.client_config = {
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
+            'token_uri': 'https://oauth2.googleapis.com/token',
+            'auth_provider_x509_cert_url': 'https://www.googleapis.com/oauth2/v1/certs',
+        }
+        
+        print("✅ Loaded OAuth client configuration from environment variables")
+        print(f"   Client ID: {client_id[:20]}...")
+        print(f"   Redirect URI: {redirect_uri}")
     
     def generate_authorization_url(self, redirect_uri: str, state: Optional[str] = None) -> LoginResponse:
         """
@@ -203,7 +220,7 @@ class OAuthService:
     
     def validate_tokens(self, tokens: OAuthTokens) -> AuthStatus:
         """
-        Validate if tokens are still valid
+        Validate if tokens are still valid (basic validation only)
         
         Args:
             tokens: OAuth tokens to validate
@@ -213,6 +230,33 @@ class OAuthService:
         """
         try:
             # Check if token is expired
+            if tokens.expires_at and tokens.expires_at <= datetime.now():
+                return AuthStatus.EXPIRED
+            
+            # Basic validation - just check if we have required tokens
+            if not tokens.access_token:
+                return AuthStatus.ERROR
+                
+            # For session validation, we don't make expensive API calls
+            # Gmail API validation happens only when actually using Gmail services
+            return AuthStatus.AUTHENTICATED
+            
+        except Exception:
+            return AuthStatus.ERROR
+            
+    def validate_tokens_with_api_check(self, tokens: OAuthTokens) -> AuthStatus:
+        """
+        Validate tokens with actual Gmail API call (expensive operation)
+        Use this only when actually needing to access Gmail
+        
+        Args:
+            tokens: OAuth tokens to validate
+            
+        Returns:
+            AuthStatus indicating token validity
+        """
+        try:
+            # Check if token is expired first
             if tokens.expires_at and tokens.expires_at <= datetime.now():
                 return AuthStatus.EXPIRED
             

@@ -5,11 +5,9 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 interface CallbackState {
   status: 'processing' | 'success' | 'error';
@@ -25,13 +23,16 @@ export default function OAuthCallbackPage() {
     status: 'processing',
     message: 'Processing authentication...'
   });
+  const hasProcessedRef = useRef(false);
 
   useEffect(() => {
     const handleOAuthCallback = async () => {
       // Prevent multiple executions
-      if (callbackState.status !== 'processing') {
+      if (hasProcessedRef.current || callbackState.status !== 'processing') {
         return;
       }
+      
+      hasProcessedRef.current = true;
 
       try {
         // Extract parameters from URL
@@ -95,7 +96,7 @@ export default function OAuthCallbackPage() {
     };
 
     handleOAuthCallback();
-  }, [searchParams, router, authOperations, callbackState.status]);
+  }, [searchParams, router, callbackState.status]);
 
   // Auto-retry on error after delay
   useEffect(() => {

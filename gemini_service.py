@@ -200,14 +200,15 @@ def create_gemini_session_config(gemini_tools: List[types.Tool]) -> Dict[str, An
     return config
 
 
-async def handle_tool_execution(gmail_agent, function_call, nav_tools: Optional[EmailNavigationTools] = None) -> types.FunctionResponse:
+async def handle_tool_execution(gmail_agent, function_call, nav_tools: Optional[EmailNavigationTools] = None, oauth_tool_executor=None) -> types.FunctionResponse:
     """
     Handle execution of a single tool call
     
     Args:
-        gmail_agent: Gmail MCP agent
+        gmail_agent: Gmail MCP agent (for MCP mode)
         function_call: Gemini function call object
         nav_tools: Optional navigation tools for custom functions
+        oauth_tool_executor: Optional OAuth Gmail tool executor (for OAuth mode)
         
     Returns:
         FunctionResponse for Gemini
@@ -226,9 +227,24 @@ async def handle_tool_execution(gmail_agent, function_call, nav_tools: Optional[
                 response=result
             )
         
-        # Handle MCP tools
-        else:
-            print(f"🎯 Executing {function_call.name} with args: {dict(function_call.args)}")
+        # Handle OAuth Gmail tools
+        elif oauth_tool_executor and function_call.name.startswith("gmail_"):
+            print(f"🎯 Executing OAuth Gmail tool: {function_call.name} with args: {dict(function_call.args)}")
+            
+            result = await oauth_tool_executor.execute_tool(
+                function_call.name,
+                dict(function_call.args)
+            )
+            
+            return types.FunctionResponse(
+                id=function_call.id,
+                name=function_call.name,
+                response=result
+            )
+        
+        # Handle MCP tools (fallback)
+        elif gmail_agent:
+            print(f"🎯 Executing MCP tool: {function_call.name} with args: {dict(function_call.args)}")
             
             result = await gmail_agent.call_tool(
                 function_call.name,
@@ -251,6 +267,10 @@ async def handle_tool_execution(gmail_agent, function_call, nav_tools: Optional[
                 name=function_call.name,
                 response=response_content
             )
+        
+        # No tool executor available
+        else:
+            raise Exception(f"No tool executor available for {function_call.name}")
     
     except Exception as e:
         print(f"⚠️ Tool call error for {function_call.name}: {e}")

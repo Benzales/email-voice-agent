@@ -242,8 +242,12 @@ async def create_gemini_session_with_websocket(gemini_session_config: Dict[str, 
                                             
                                             for fc in tool_call.function_calls:
                                                 print(f"🔧 Executing tool: {fc.name}")
+                                                # Get OAuth tool executor from app state if available
+                                                from fastapi_server import app_state
+                                                oauth_tool_executor = getattr(app_state, 'oauth_tool_executor', None)
+                                                
                                                 function_response = await handle_tool_execution(
-                                                    email_info.get('gmail_agent'), fc, nav_tools
+                                                    email_info.get('gmail_agent'), fc, nav_tools, oauth_tool_executor
                                                 )
                                                 function_responses.append(function_response)
                                             
