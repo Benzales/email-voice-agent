@@ -100,7 +100,9 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",  # Next.js development
         "https://localhost:3000", # HTTPS local development
-        "https://courier-ktdswpwaf-benjamingonzales121102-1293s-projects.vercel.app",  # Production Vercel
+        "https://courier-ktdswpwaf-benjamingonzales121102-1293s-projects.vercel.app",  # Production Vercel (old)
+        "https://courier-rgq51i636-benjamingonzales121102-1293s-projects.vercel.app",  # Production Vercel (new)
+        "https://courier-black.vercel.app",  # Production alias
         "https://*.vercel.app",   # Other Vercel deployments
     ],
     allow_credentials=True,
@@ -185,7 +187,7 @@ async def get_session_status(session_id: Optional[str] = Depends(get_current_ses
 
 # OAuth Authentication Endpoints
 @app.post("/auth/login", response_model=LoginResponse)
-async def login(request: LoginRequest):
+async def login(request: LoginRequest, http_request: Request):
     """
     Initiate OAuth login flow
     Returns authorization URL for user to visit
@@ -198,9 +200,26 @@ async def login(request: LoginRequest):
         default_redirect_uri = oauth_service.redirect_uri or "http://localhost:8000/auth/callback"
         redirect_uri = request.redirect_uri or default_redirect_uri
         
+        # Encode the frontend origin in the state parameter so we can redirect back to the correct domain
+        import base64
+        import json
+        
+        # Get the origin from the request headers
+        origin = http_request.headers.get("origin")
+        if not origin:
+            # Fallback to environment variable or localhost
+            origin = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        
+        # Create state with both user state and frontend origin
+        state_data = {
+            "user_state": request.state,
+            "frontend_origin": origin
+        }
+        encoded_state = base64.urlsafe_b64encode(json.dumps(state_data).encode()).decode()
+        
         login_response = oauth_service.generate_authorization_url(
             redirect_uri=redirect_uri,
-            state=request.state
+            state=encoded_state
         )
         
         return login_response
@@ -242,8 +261,21 @@ async def oauth_callback(
         # Create user session
         session_id = await session_manager.create_session(tokens, user_info)
         
-        # Redirect to frontend with session info
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        # Decode the state to get the frontend origin
+        import base64
+        import json
+        
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")  # Default fallback
+        
+        if state:
+            try:
+                # Decode the state parameter to extract frontend origin
+                state_data = json.loads(base64.urlsafe_b64decode(state.encode()).decode())
+                frontend_url = state_data.get("frontend_origin", frontend_url)
+            except Exception as e:
+                print(f"⚠️ Failed to decode state parameter: {e}, using default frontend URL")
+        
+        # Redirect to the correct frontend origin with session info
         redirect_url = f"{frontend_url}/auth/callback?session_id={session_id}&success=true"
         return RedirectResponse(url=redirect_url, status_code=302)
         
