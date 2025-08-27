@@ -5,7 +5,7 @@
 
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -15,7 +15,7 @@ interface CallbackState {
   error?: string;
 }
 
-export default function OAuthCallbackPage() {
+function OAuthCallbackContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [authState, authOperations] = useAuth();
@@ -61,8 +61,8 @@ export default function OAuthCallbackPage() {
           sessionStorage.removeItem('oauth_state');
 
           // Use the auth hook to handle the callback
-          if ((authOperations as any).handleOAuthCallback) {
-            await (authOperations as any).handleOAuthCallback(sessionId);
+          if (authOperations && 'handleOAuthCallback' in authOperations) {
+            await (authOperations as { handleOAuthCallback: (sessionId: string) => Promise<void> }).handleOAuthCallback(sessionId);
           }
 
           setCallbackState({
@@ -185,5 +185,17 @@ export default function OAuthCallbackPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function OAuthCallbackPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    }>
+      <OAuthCallbackContent />
+    </Suspense>
   );
 }

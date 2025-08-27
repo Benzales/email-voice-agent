@@ -275,7 +275,7 @@ export function useAuth(): [AuthState, AuthOperations] {
   };
 
   // Expose handleOAuthCallback for callback page
-  (operations as any).handleOAuthCallback = handleOAuthCallback;
+  (operations as typeof operations & { handleOAuthCallback: typeof handleOAuthCallback }).handleOAuthCallback = handleOAuthCallback;
 
   return [authState, operations];
 }
