@@ -36,7 +36,7 @@ A voice-driven Gmail assistant that helps users clear their inbox through natura
 │                     FastAPI Backend                             │
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │                 Audio Bridge                            │    │
-│  │  • WebSocket ↔ Gemini Live Streaming                   │    │
+│  │  • WebSocket ↔ git Live Streaming                   │    │
 │  │  • Continuous Response Listener                        │    │
 │  │  • Tool Execution Handler                              │    │
 │  └─────────────────────────────────────────────────────────┘    │
@@ -109,11 +109,13 @@ User Authentication Flow:
 - **`UserProfile`**: Displays authenticated user information
 - **`ProtectedRoute`**: Authentication guards for protected content
 - **OAuth Callback Page**: Handles post-authentication redirect
+- **Backend Config**: Centralized backend URL management for production/development
 
 **Backend OAuth Services:**
-- **`oauth_service.py`**: Google OAuth 2.0 flow management
+- **`oauth_service.py`**: Google OAuth 2.0 flow management with environment variables
 - **`user_session.py`**: Multi-user session storage and management
 - **OAuth Endpoints**: Complete REST API for authentication operations
+- **Dynamic Redirect System**: Automatically redirects to correct frontend domain
 
 #### **Supported OAuth Scopes**
 - `https://www.googleapis.com/auth/gmail.modify` - Full Gmail access for email management
@@ -127,6 +129,33 @@ User Authentication Flow:
 - **Session Timeout**: 24-hour session expiry with periodic cleanup
 - **Multi-User Support**: Concurrent sessions for multiple users
 - **Security Features**: CSRF protection, token revocation, secure logout
+
+#### **🔄 Dynamic OAuth Redirect System**
+**Problem Solved**: Multiple Vercel deployment URLs (project alias vs deployment hash) caused double authentication when OAuth callback redirected to wrong domain.
+
+**Solution**: Dynamic frontend origin detection and state-encoded redirects:
+```typescript
+// Frontend Origin Detection (Backend)
+origin = http_request.headers.get("origin") || fallback_url
+
+// State Parameter Encoding
+state_data = {
+  "user_state": request.state,
+  "frontend_origin": origin  // 🎯 Captures actual frontend domain
+}
+encoded_state = base64.urlsafe_b64encode(json.dumps(state_data))
+
+// OAuth Callback Dynamic Redirect
+state_data = json.loads(base64.urlsafe_b64decode(state))
+frontend_url = state_data.get("frontend_origin", default_fallback)
+redirect_url = f"{frontend_url}/auth/callback?session_id={session_id}"
+```
+
+**Benefits**:
+- ✅ **Single Sign-In**: Works with both `courier-black.vercel.app` and deployment URLs
+- ✅ **No Cross-Domain Issues**: User stays on same domain throughout OAuth flow
+- ✅ **Automatic Detection**: Backend automatically detects correct frontend origin
+- ✅ **Fallback Safety**: Falls back to environment variable if origin detection fails
 
 ## 🎨 User Interface Design
 
@@ -176,18 +205,21 @@ Page Load → Check Auth Status → Show Login/Authenticated UI
 
 #### **OAuth Flow Details:**
 ```
-Click Sign In → Generate Auth URL → Google Consent → Backend Callback → Session Creation → Frontend Redirect → Authenticated State
+Click Sign In → Generate Auth URL (+ Origin Detection) → Google Consent → Backend Callback → Session Creation → Dynamic Frontend Redirect → Authenticated State
 ```
 
 **Step-by-step:**
-1. **Frontend**: `POST /auth/login` → Backend generates Google OAuth URL
-2. **Redirect**: User sent to Google OAuth consent screen
-3. **Google Callback**: `GET /auth/callback?code=...` → Backend receives authorization code
-4. **Token Exchange**: Backend exchanges code for access/refresh tokens
-5. **Session Creation**: Backend creates user session with tokens
-6. **Frontend Redirect**: Backend redirects to `http://localhost:3000/auth/callback?session_id=...&success=true`
-7. **Session Storage**: Frontend stores session ID in localStorage
-8. **Auth State Update**: useAuth hook updates to authenticated state
+1. **Frontend**: `POST /auth/login` → Backend captures origin header and generates Google OAuth URL
+2. **State Encoding**: Backend encodes frontend origin in OAuth state parameter
+3. **Redirect**: User sent to Google OAuth consent screen
+4. **Google Callback**: `GET /auth/callback?code=...&state=...` → Backend receives authorization code
+5. **Token Exchange**: Backend exchanges code for access/refresh tokens
+6. **Session Creation**: Backend creates user session with tokens
+7. **Dynamic Redirect**: Backend decodes state, redirects to original frontend domain
+   - `https://courier-black.vercel.app/auth/callback?session_id=...&success=true` (if from alias)
+   - `https://courier-{hash}.vercel.app/auth/callback?session_id=...&success=true` (if from deployment)
+8. **Session Storage**: Frontend stores session ID in localStorage
+9. **Auth State Update**: useAuth hook updates to authenticated state
 
 ### 2. Initialization Phase (Authenticated Users)
 ```
@@ -283,9 +315,11 @@ fastapi_server.py (Orchestration + OAuth Endpoints)
 
 #### **OAuth Service** (`oauth_service.py`)
 - **Google OAuth 2.0 Flow**: Complete authorization URL generation and code exchange
-- **Token Management**: Access token refresh and validation
+- **Environment Variables**: Loads OAuth credentials from environment (no credentials.json)
+- **Token Management**: Access token refresh and validation with optimized validation
 - **Gmail API Integration**: Direct Gmail service creation with user tokens
 - **Security Features**: CSRF protection, token revocation, scope validation
+- **Production Ready**: Secure environment-based configuration for deployment
 
 #### **User Session Manager** (`user_session.py`)
 - **Multi-User Support**: Concurrent sessions for multiple authenticated users
@@ -294,20 +328,24 @@ fastapi_server.py (Orchestration + OAuth Endpoints)
 - **Session Validation**: Real-time session and token validation
 - **Resource Management**: Proper cleanup and memory management
 
-#### **Email Service** (`email_service.py` + `email_service_oauth.py`)
+#### **Email Service** (`email_service.py` + `email_service_oauth.py` + `oauth_gmail_tools.py`)
 - **Dual Mode Support**: Both OAuth direct API and MCP agent modes
 - **EmailManager**: Sequential email processing with deterministic state
 - **OAuth Email Operations**: Direct Gmail API calls with user tokens
+- **OAuth Gmail Tools**: Gemini-compatible tools for OAuth mode (gmail_modify_email, gmail_send_email, etc.)
+- **Dynamic Tool Selection**: Automatically provides OAuth tools to Gemini when user is authenticated
 - **Email Fetching**: Gmail search with user-specific authentication
 - **Progress Tracking**: Current/total/remaining email counts
 - **State Management**: Clean email iteration and completion detection
 
 #### **Gemini Service** (`gemini_service.py`)
-- **MCP Connection**: Integration with Gmail MCP server
+- **MCP Connection**: Integration with Gmail MCP server (fallback mode)
 - **Tool Discovery**: Dynamic discovery of 14 Gmail tools
 - **Tool Conversion**: MCP schema → Gemini Live format
+- **OAuth Tool Integration**: Prioritizes OAuth Gmail tools when user is authenticated
+- **Dual Tool Execution**: Handles both OAuth and MCP tool execution modes
 - **Session Configuration**: Gemini Live setup with tools and system instructions
-- **Tool Execution**: Gmail action processing and response handling
+- **Tool Execution**: Gmail action processing and response handling with proper authentication
 
 #### **Audio Bridge** (`audio_bridge.py`)
 - **WebSocket Integration**: Frontend ↔ Backend audio streaming
@@ -512,23 +550,39 @@ cd web && npm run dev
 
 ### Production Deployment
 
-#### **Backend (Railway/Render/DigitalOcean)**
-- **FastAPI server**: Handles WebSocket connections and Gmail integration
-- **Environment variables**: GEMINI_API_KEY required
+#### **Backend (Fly.io)**
+- **FastAPI server**: Containerized with Docker for WebSocket and Gmail integration
+- **Global edge deployment**: Deployed on Fly.io for low-latency WebSocket connections
+- **Environment variables**: 
+  - `GEMINI_API_KEY` - Google AI API key
+  - `GMAIL_CLIENT_ID` - Google OAuth client ID
+  - `GMAIL_CLIENT_SECRET` - Google OAuth client secret  
+  - `GMAIL_REDIRECT_URI` - OAuth callback URI (`https://courier.fly.dev/auth/callback`)
+  - `FRONTEND_URL` - Frontend domain for OAuth redirects (optional, auto-detected)
 - **Port**: 8000 (configurable)
 - **Health checks**: `/health` endpoint for monitoring
+- **Scaling**: Single machine deployment with `max_machines_running = 1` for session persistence
+- **Domain**: `https://courier.fly.dev`
 
 #### **Frontend (Vercel)**
-- **Next.js application**: Static site with client-side audio processing
-- **Environment variables**: Backend WebSocket URL
+- **Next.js application**: Static site with client-side audio processing and OAuth integration
+- **Environment variables**: 
+  - `NEXT_PUBLIC_API_URL` - Backend API URL (defaults to `https://courier.fly.dev`)
+  - `NEXT_PUBLIC_WS_URL` - WebSocket URL (defaults to `wss://courier.fly.dev/ws/voice-session`)
 - **CDN**: Global distribution via Vercel's edge network
-- **HTTPS**: Required for microphone access
+- **HTTPS**: Required for microphone access and OAuth security
+- **Multiple URLs**: 
+  - Production deployment: `https://courier-{hash}-{project}.vercel.app`
+  - Project alias: `https://courier-black.vercel.app` (cleaner URL)
+- **Dynamic OAuth redirects**: Backend automatically redirects to correct domain
 
 #### **Architecture Benefits**
-- **Scalable**: Frontend scales via CDN, backend scales horizontally
-- **Reliable**: Separate concerns, independent scaling
-- **Cost-effective**: Frontend free on Vercel, backend ~$5-10/month
-- **Global**: Fast loading worldwide via Vercel edge network
+- **Scalable**: Frontend scales via CDN, backend scales globally via Fly.io
+- **Reliable**: Separate concerns, independent scaling, health monitoring
+- **Cost-effective**: Frontend free on Vercel, backend ~$5-10/month on Fly.io
+- **Global**: Fast loading worldwide via Vercel + Fly.io edge networks
+- **Secure**: OAuth environment variables isolated in production secrets
+- **WebSocket optimized**: Fly.io provides excellent WebSocket performance globally
 
 ## 🔍 Key Technical Innovations
 
@@ -627,6 +681,8 @@ Gemini: "I've deleted that email."
 - ✅ **Scope management**: Proper Gmail permissions and user consent
 - ✅ **Authentication guards**: Protected routes and conditional rendering
 - ✅ **Cost protection**: Prevents unauthorized expensive API operations
+- ✅ **Environment-based config**: Production-ready OAuth without credentials files
+- ✅ **Dynamic OAuth redirects**: Single sign-in across multiple deployment URLs
 
 ### Performance Optimizations
 - ✅ **Audio quality**: Native 48kHz without interpolation artifacts
@@ -636,4 +692,23 @@ Gemini: "I've deleted that email."
 - ✅ **Authentication efficiency**: Optimized auth checks and token refresh
 - ✅ **Security performance**: Fast session validation without blocking UX
 
-The web-based voice email agent now provides **enterprise-grade security** with OAuth authentication protecting all expensive operations, while maintaining the streamlined voice-first user experience. Multiple users can securely access their personal Gmail accounts through natural voice commands **without risk of unauthorized cost abuse**.
+### 🚀 **Production Deployment Achievements**
+- ✅ **Containerized Backend**: Docker-based FastAPI deployment on Fly.io
+- ✅ **Global Edge Network**: Fly.io + Vercel for worldwide low-latency access
+- ✅ **Environment Security**: All secrets managed via Fly.io secrets and Vercel env vars
+- ✅ **CORS Configuration**: Dynamic CORS handling for multiple frontend domains
+- ✅ **Health Monitoring**: Production health checks and deployment validation
+- ✅ **WebSocket Optimization**: Fly.io single-machine deployment for session persistence
+- ✅ **Multiple Frontend URLs**: Support for both project aliases and deployment hashes
+- ✅ **Dynamic Redirects**: OAuth callback automatically redirects to correct domain
+- ✅ **Zero Downtime**: Rolling deployments with health checks
+- ✅ **Production Hardening**: Removed debug endpoints, secure OAuth configuration
+
+The web-based voice email agent is now **fully deployed in production** with enterprise-grade security and global accessibility. The application provides OAuth authentication protecting all expensive operations, while maintaining the streamlined voice-first user experience. Multiple users can securely access their personal Gmail accounts through natural voice commands **without risk of unauthorized cost abuse**.
+
+## 🌐 **Live Production URLs**
+- **Primary**: https://courier-black.vercel.app (Clean project alias)
+- **Backend**: https://courier.fly.dev (Global Fly.io deployment)
+- **Alternative**: https://courier-{hash}-{project}.vercel.app (Deployment-specific URLs)
+
+The application automatically handles authentication across all URLs with dynamic OAuth redirects, ensuring users never need to authenticate twice regardless of which URL they access.
