@@ -98,8 +98,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",  # Next.js development
-        "https://*.vercel.app",   # Vercel deployment
         "https://localhost:3000", # HTTPS local development
+        "https://courier-ktdswpwaf-benjamingonzales121102-1293s-projects.vercel.app",  # Production Vercel
+        "https://*.vercel.app",   # Other Vercel deployments
     ],
     allow_credentials=True,
     allow_methods=["*"],
