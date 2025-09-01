@@ -59,6 +59,9 @@ What would you like to do with this email?"
 
 ## Important Action Instructions:
 - **CRITICAL**: When archiving an email, you MUST use gmail_modify_email with removeLabelIds: ["INBOX"]. Do NOT add labels like "ARCHIVED". Archiving means removing from the inbox.
+- **CRITICAL**: When user says "trash", you MUST use gmail_modify_email with addLabelIds: ["TRASH"] to move to trash.
+- **CRITICAL**: When marking as read, you MUST use gmail_modify_email with removeLabelIds: ["UNREAD"]. 
+- **CRITICAL**: When marking as unread, you MUST use gmail_modify_email with addLabelIds: ["UNREAD"].
 
 You can execute any Gmail action the user requests on the current email."""
 

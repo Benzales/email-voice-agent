@@ -37,7 +37,7 @@ class OAuthGmailTools:
             function_declarations=[
                 types.FunctionDeclaration(
                     name="gmail_modify_email",
-                    description="Modify Gmail email labels (archive, mark read/unread, etc.)",
+                    description="Modify Gmail email labels (archive, move to trash, mark read/unread, etc.). Use addLabelIds: ['TRASH'] to trash emails, removeLabelIds: ['UNREAD'] to mark as read, addLabelIds: ['UNREAD'] to mark as unread.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
@@ -117,7 +117,7 @@ class OAuthGmailTools:
             function_declarations=[
                 types.FunctionDeclaration(
                     name="gmail_delete_email",
-                    description="Delete an email permanently",
+                    description="PERMANENTLY delete an email (cannot be recovered). For normal 'delete' commands, use gmail_modify_email with TRASH label instead.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
