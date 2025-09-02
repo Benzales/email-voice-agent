@@ -67,3 +67,7 @@ logs/
 .python-version 
 
 mcp_agent.secrets.yaml
+
+# User tracking database
+users.db
+*.db

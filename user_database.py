@@ -79,13 +79,25 @@ class UserDatabase:
     Provides persistent storage for user information and login history
     """
     
-    def __init__(self, db_path: str = "users.db"):
+    def __init__(self, db_path: Optional[str] = None):
         """
         Initialize database service
         
         Args:
-            db_path: Path to SQLite database file
+            db_path: Path to SQLite database file (auto-detects production vs development)
         """
+        if db_path is None:
+            # Auto-detect environment
+            import os
+            if os.getenv('ENVIRONMENT') == 'production':
+                # Use persistent volume in production
+                db_path = "/data/users.db"
+                # Ensure data directory exists
+                os.makedirs("/data", exist_ok=True)
+            else:
+                # Use local file in development
+                db_path = "users.db"
+        
         self.db_path = Path(db_path)
         self._lock = asyncio.Lock()
         

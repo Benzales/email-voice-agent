@@ -677,6 +677,55 @@ Gemini: "I've created a draft reply for you to review later."
 - **Audio Settings**: Browser manages microphone permissions and settings
 - **Session Timeouts**: 2-minute timeout per email session
 
+### User Database Management
+The application includes a persistent SQLite database for user tracking with multiple access methods:
+
+#### **Quick Database Status Check**
+```bash
+# One-liner to check current database status
+flyctl ssh console -C "python3 -c 'import sqlite3; c=sqlite3.connect(\"/data/users.db\"); print(f\"Users: {c.execute(\"SELECT COUNT(*) FROM users\").fetchone()[0]}, Sessions: {c.execute(\"SELECT COUNT(*) FROM login_history\").fetchone()[0]}\")'"
+```
+
+#### **Detailed Database Inspection**
+```bash
+# Connect to production server and inspect database contents
+flyctl ssh console -C "python3 -c \"
+import sqlite3
+conn = sqlite3.connect('/data/users.db')
+cursor = conn.cursor()
+
+# Get user count and login count
+cursor.execute('SELECT COUNT(*) FROM users')
+user_count = cursor.fetchone()[0]
+cursor.execute('SELECT COUNT(*) FROM login_history')
+login_count = cursor.fetchone()[0]
+
+print(f'📊 Database Status: {user_count} users, {login_count} sessions')
+
+# Show recent users
+if user_count > 0:
+    cursor.execute('SELECT email, name, total_logins, total_emails_processed, last_login FROM users ORDER BY last_login DESC LIMIT 5')
+    print('👥 Recent Users:')
+    for row in cursor.fetchall():
+        email, name, logins, emails, last_login = row
+        print(f'   {email} ({name}): {logins} logins, {emails} emails')
+
+conn.close()
+\""
+```
+
+#### **Admin API Endpoints**
+All admin endpoints require authentication via `Authorization: Bearer {session_id}` header:
+- **`GET /admin/users`** - List all users with pagination
+- **`GET /admin/users/{user_id}`** - Detailed user info + login history
+- **`GET /admin/statistics`** - Overall usage statistics
+- **`POST /admin/cleanup`** - Clean up old login records
+
+#### **Database Location**
+- **Development**: `users.db` (local file, git-ignored)
+- **Production**: `/data/users.db` (persistent Fly.io volume)
+- **Backup**: Automatic Fly.io volume snapshots (5-day retention)
+
 ## 🎉 Key Achievements
 
 ### Functional Completeness
@@ -688,6 +737,7 @@ Gemini: "I've created a draft reply for you to review later."
 - ✅ **OAuth Authentication**: Complete Google OAuth 2.0 integration
 - ✅ **Multi-user support**: Multiple users can authenticate simultaneously
 - ✅ **Clean UX**: Authentication-aware interface with user profiles
+- ✅ **User Tracking**: Persistent SQLite database with login history and usage statistics
 
 ### Technical Excellence
 - ✅ **Modern stack**: FastAPI + Next.js + TypeScript + OAuth 2.0
@@ -736,6 +786,7 @@ Gemini: "I've created a draft reply for you to review later."
 - ✅ **Dynamic Redirects**: OAuth callback automatically redirects to correct domain
 - ✅ **Zero Downtime**: Rolling deployments with health checks
 - ✅ **Production Hardening**: Removed debug endpoints, secure OAuth configuration
+- ✅ **Persistent User Database**: SQLite database with Fly.io volume for user tracking
 
 The web-based voice email agent is now **fully deployed in production** with enterprise-grade security and global accessibility. The application provides OAuth authentication protecting all expensive operations, while maintaining the streamlined voice-first user experience. Multiple users can securely access their personal Gmail accounts through natural voice commands **without risk of unauthorized cost abuse**.
 
