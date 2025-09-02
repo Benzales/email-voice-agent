@@ -183,7 +183,7 @@ The UI follows a streamlined, voice-first design philosophy:
 #### **Active Session State**
 - **Recording indicator**: Shows microphone is active
 - **Progress bar**: Current email / total emails
-- **Voice command hints**: "archive", "delete", "skip", "reply"
+- **Voice command hints**: "archive", "read it", "create draft", "skip"
 - **Stop button**: Allows user to end session early
 
 #### **Completion State**
@@ -239,7 +239,7 @@ User Clicks Button → Start Voice Session → Initialize Gemini Live → Begin 
 
 **Technical Details:**
 - Frontend sends `start_session` message via WebSocket
-- Backend creates Gemini Live session with 15 Gmail tools
+- Backend creates Gemini Live session with Gmail tools (5 OAuth Gmail tools + navigation)
 - Audio bridge establishes bidirectional streaming
 - First email announced to user
 
@@ -251,8 +251,8 @@ Announce Email → Wait for Voice Command → Execute Tool → Confirm Action �
 **Detailed Flow:**
 1. **Email Announcement**: Gemini reads "From [sender] - [subject]. What would you like to do?"
 2. **Continuous Listening**: System waits indefinitely for user voice input
-3. **Voice Recognition**: User speaks command ("archive", "delete", "mark as read", etc.)
-4. **Tool Execution**: Gemini calls appropriate Gmail tool (gmail_modify_email, gmail_delete_email, etc.)
+3. **Voice Recognition**: User speaks command ("archive", "read it", "create draft", etc.)
+4. **Tool Execution**: Gemini calls appropriate Gmail tool (gmail_modify_email, gmail_read_email_content, gmail_create_draft, etc.)
 5. **Action Confirmation**: Gemini confirms "I've archived that email"
 6. **Session Completion**: complete_current_email tool called automatically
 7. **Next Email**: New isolated session starts for next email
@@ -332,7 +332,7 @@ fastapi_server.py (Orchestration + OAuth Endpoints)
 - **Dual Mode Support**: Both OAuth direct API and MCP agent modes
 - **EmailManager**: Sequential email processing with deterministic state
 - **OAuth Email Operations**: Direct Gmail API calls with user tokens
-- **OAuth Gmail Tools**: Gemini-compatible tools for OAuth mode (gmail_modify_email, gmail_send_email, etc.)
+- **OAuth Gmail Tools**: Gemini-compatible tools for OAuth mode (gmail_modify_email, gmail_create_draft, gmail_read_email_content, gmail_list_labels, etc.)
 - **Dynamic Tool Selection**: Automatically provides OAuth tools to Gemini when user is authenticated
 - **Email Fetching**: Gmail search with user-specific authentication
 - **Progress Tracking**: Current/total/remaining email counts
@@ -340,7 +340,7 @@ fastapi_server.py (Orchestration + OAuth Endpoints)
 
 #### **Gemini Service** (`gemini_service.py`)
 - **MCP Connection**: Integration with Gmail MCP server (fallback mode)
-- **Tool Discovery**: Dynamic discovery of 14 Gmail tools
+- **Tool Discovery**: Dynamic discovery of Gmail tools (MCP fallback mode)
 - **Tool Conversion**: MCP schema → Gemini Live format
 - **OAuth Tool Integration**: Prioritizes OAuth Gmail tools when user is authenticated
 - **Dual Tool Execution**: Handles both OAuth and MCP tool execution modes
@@ -493,11 +493,14 @@ async function websocket_voice_session(
 
 ### Supported Voice Commands
 - **"archive"** / **"archive this email"** → Removes from INBOX label
-- **"delete"** / **"delete this email"** → Permanently deletes email
+- **"delete"** / **"trash this email"** → Moves email to trash (recoverable)
 - **"mark as read"** → Removes UNREAD label
 - **"mark as unread"** → Adds UNREAD label  
+- **"read it"** / **"what does it say"** → Reads full email content aloud
+- **"create draft"** / **"save as draft"** → Creates draft email for later
+- **"move to [label]"** → Moves email to specified label/folder
+- **"what labels do I have"** → Lists available Gmail labels
 - **"skip"** / **"next"** / **"continue"** → Moves to next email without action
-- **"reply"** → Starts email composition flow
 
 ### Voice Processing Flow
 ```
@@ -616,12 +619,14 @@ cd web && npm run dev
 ### Voice Interaction Pattern
 ```
 Gemini: "From Tesla - Get $7500 Off. What would you like to do with this email?"
+User: "read it"
+Gemini: "This email says: Take advantage of our limited-time offer..."
 User: "archive"
 Gemini: "I've archived that email for you."
 → Automatically moves to next email
 Gemini: "From Chase - Review new account. What would you like to do with this email?"
-User: "delete"
-Gemini: "I've deleted that email."
+User: "create draft reply"
+Gemini: "I've created a draft reply for you to review later."
 → Process continues until inbox is clear
 ```
 
@@ -649,7 +654,7 @@ Gemini: "I've deleted that email."
 
 ### Functional Completeness
 - ✅ **Full voice workflow**: Speak → Action → Next email
-- ✅ **All Gmail actions**: Archive, delete, mark read/unread, reply, skip
+- ✅ **All Gmail actions**: Archive, trash, mark read/unread, read content, create drafts, label management, skip
 - ✅ **Perfect audio**: Natural speech quality and recognition
 - ✅ **Reliable sessions**: Continuous listening and proper tool execution
 - ✅ **OAuth Authentication**: Complete Google OAuth 2.0 integration

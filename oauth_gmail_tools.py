@@ -71,12 +71,14 @@ class OAuthGmailTools:
         )
         tools.append(modify_email_tool)
         
-        # Gmail send email tool
-        send_email_tool = types.Tool(
+
+        
+        # Gmail create draft tool
+        create_draft_tool = types.Tool(
             function_declarations=[
                 types.FunctionDeclaration(
-                    name="gmail_send_email",
-                    description="Send an email through Gmail",
+                    name="gmail_create_draft",
+                    description="Create a draft email that can be edited and sent later. Use this when user wants to save an email for later or prepare a response.",
                     parameters=types.Schema(
                         type=types.Type.OBJECT,
                         properties={
@@ -102,7 +104,7 @@ class OAuthGmailTools:
                             ),
                             "reply_to": types.Schema(
                                 type=types.Type.STRING,
-                                description="Email ID this is a reply to"
+                                description="Email ID this is a reply to (for threading)"
                             )
                         },
                         required=["to", "subject", "body"]
@@ -110,28 +112,7 @@ class OAuthGmailTools:
                 )
             ]
         )
-        tools.append(send_email_tool)
-        
-        # Gmail delete email tool
-        delete_email_tool = types.Tool(
-            function_declarations=[
-                types.FunctionDeclaration(
-                    name="gmail_delete_email",
-                    description="PERMANENTLY delete an email (cannot be recovered). For normal 'delete' commands, use gmail_modify_email with TRASH label instead.",
-                    parameters=types.Schema(
-                        type=types.Type.OBJECT,
-                        properties={
-                            "id": types.Schema(
-                                type=types.Type.STRING,
-                                description="Email ID to delete"
-                            )
-                        },
-                        required=["id"]
-                    )
-                )
-            ]
-        )
-        tools.append(delete_email_tool)
+        tools.append(create_draft_tool)
         
         # Gmail create label tool
         create_label_tool = types.Tool(
@@ -223,10 +204,8 @@ class OAuthGmailTools:
         try:
             if tool_name == "gmail_modify_email":
                 return await self._modify_email(arguments)
-            elif tool_name == "gmail_send_email":
-                return await self._send_email(arguments)
-            elif tool_name == "gmail_delete_email":
-                return await self._delete_email(arguments)
+            elif tool_name == "gmail_create_draft":
+                return await self._create_draft(arguments)
             elif tool_name == "gmail_create_label":
                 return await self._create_label(arguments)
             elif tool_name == "gmail_read_email_content":
@@ -273,59 +252,70 @@ class OAuthGmailTools:
         
         return {"success": True, "message_id": result["id"]}
     
-    async def _send_email(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Send an email"""
+
+    
+    async def _create_draft(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a draft email"""
         import base64
         import email.mime.text
         import email.mime.multipart
         
-        # Create email message
-        if args.get("reply_to"):
-            # This is a reply - get original message for proper threading
-            original = self.gmail_service.users().messages().get(
-                userId='me', id=args["reply_to"]
+        try:
+            # Create email message
+            if args.get("reply_to"):
+                # This is a reply draft - get original message for proper threading
+                original = self.gmail_service.users().messages().get(
+                    userId='me', id=args["reply_to"]
+                ).execute()
+                
+                msg = email.mime.multipart.MIMEMultipart()
+                msg['to'] = args["to"]
+                msg['subject'] = f"Re: {args['subject']}" if not args['subject'].startswith('Re:') else args['subject']
+                
+                # Add threading headers
+                if 'payload' in original and 'headers' in original['payload']:
+                    headers = {h['name']: h['value'] for h in original['payload']['headers']}
+                    if 'Message-ID' in headers:
+                        msg['In-Reply-To'] = headers['Message-ID']
+                        msg['References'] = headers.get('References', '') + ' ' + headers['Message-ID']
+                
+                # Add body
+                msg.attach(email.mime.text.MIMEText(args["body"], 'plain'))
+            else:
+                msg = email.mime.text.MIMEText(args["body"])
+                msg['to'] = args["to"]
+                msg['subject'] = args["subject"]
+            
+            if args.get("cc"):
+                msg['cc'] = args["cc"]
+            if args.get("bcc"):
+                msg['bcc'] = args["bcc"]
+                
+            # Encode message for draft creation
+            raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+            
+            # Create draft
+            draft_body = {
+                'message': {
+                    'raw': raw_message
+                }
+            }
+            
+            result = self.gmail_service.users().drafts().create(
+                userId='me',
+                body=draft_body
             ).execute()
             
-            msg = email.mime.multipart.MIMEMultipart()
-            msg['to'] = args["to"]
-            msg['subject'] = f"Re: {args['subject']}"
+            return {
+                "success": True, 
+                "draft_id": result["id"],
+                "message_id": result["message"]["id"],
+                "recipient": args["to"],
+                "subject": args["subject"]
+            }
             
-            # Add threading headers
-            if 'payload' in original and 'headers' in original['payload']:
-                headers = {h['name']: h['value'] for h in original['payload']['headers']}
-                if 'Message-ID' in headers:
-                    msg['In-Reply-To'] = headers['Message-ID']
-                    msg['References'] = headers.get('References', '') + ' ' + headers['Message-ID']
-        else:
-            msg = email.mime.text.MIMEText(args["body"])
-            msg['to'] = args["to"]
-            msg['subject'] = args["subject"]
-        
-        if args.get("cc"):
-            msg['cc'] = args["cc"]
-        if args.get("bcc"):
-            msg['bcc'] = args["bcc"]
-            
-        # Encode and send
-        raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        
-        result = self.gmail_service.users().messages().send(
-            userId='me',
-            body={'raw': raw_message}
-        ).execute()
-        
-        return {"success": True, "message_id": result["id"]}
-    
-    async def _delete_email(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Delete an email permanently"""
-        email_id = args["id"]
-        
-        self.gmail_service.users().messages().delete(
-            userId='me',
-            id=email_id
-        ).execute()
-        
-        return {"success": True, "deleted_id": email_id}
+        except Exception as e:
+            return {"error": f"Failed to create draft: {e}"}
     
     async def _create_label(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new Gmail label"""

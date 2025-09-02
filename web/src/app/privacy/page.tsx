@@ -1,4 +1,5 @@
 import { Metadata } from 'next';
+import Link from 'next/link';
 
 export const metadata: Metadata = {
   title: 'Privacy Policy - Voice Email Agent',
@@ -24,9 +25,9 @@ export default function PrivacyPolicy() {
 
           <section className="mb-8">
             <h2 className="text-2xl font-semibold text-gray-900 mb-4">1. Introduction</h2>
-            <p className="text-gray-700 leading-relaxed">
-              Voice Email Agent ("we," "our," or "us") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our voice-driven Gmail assistant service (the "Service").
-            </p>
+                      <p className="text-gray-700 leading-relaxed">
+            Voice Email Agent (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;) is committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our voice-driven Gmail assistant service (the &quot;Service&quot;).
+          </p>
             <p className="text-gray-700 leading-relaxed mt-4">
               By using our Service, you agree to the collection and use of information in accordance with this Privacy Policy.
             </p>
@@ -378,12 +379,12 @@ export default function PrivacyPolicy() {
 
           <div className="mt-12 pt-8 border-t border-gray-200">
             <div className="text-center">
-              <a 
+              <Link 
                 href="/" 
                 className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
               >
                 ← Back to Voice Email Agent
-              </a>
+              </Link>
             </div>
           </div>
         </div>
