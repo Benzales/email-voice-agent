@@ -162,6 +162,51 @@ class OAuthGmailTools:
         )
         tools.append(create_label_tool)
         
+        # Gmail read email content tool
+        read_email_content_tool = types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(
+                    name="gmail_read_email_content",
+                    description="Read the full content/body of an email. Use this when user asks to read, see content, or know what an email says.",
+                    parameters=types.Schema(
+                        type=types.Type.OBJECT,
+                        properties={
+                            "id": types.Schema(
+                                type=types.Type.STRING,
+                                description="Email ID to read content from"
+                            ),
+                            "format": types.Schema(
+                                type=types.Type.STRING,
+                                description="Content format preference: 'text' for plain text, 'html' for HTML content. Defaults to 'text'."
+                            )
+                        },
+                        required=["id"]
+                    )
+                )
+            ]
+        )
+        tools.append(read_email_content_tool)
+        
+        # Gmail list labels tool
+        list_labels_tool = types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(
+                    name="gmail_list_labels",
+                    description="List all Gmail labels (folders) available in the user's account, including both system labels (Inbox, Sent, etc.) and user-created labels.",
+                    parameters=types.Schema(
+                        type=types.Type.OBJECT,
+                        properties={
+                            "include_system_labels": types.Schema(
+                                type=types.Type.BOOLEAN,
+                                description="Include system labels like INBOX, SENT, DRAFT, etc. Defaults to true."
+                            )
+                        }
+                    )
+                )
+            ]
+        )
+        tools.append(list_labels_tool)
+        
         return tools
     
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -184,6 +229,10 @@ class OAuthGmailTools:
                 return await self._delete_email(arguments)
             elif tool_name == "gmail_create_label":
                 return await self._create_label(arguments)
+            elif tool_name == "gmail_read_email_content":
+                return await self._read_email_content(arguments)
+            elif tool_name == "gmail_list_labels":
+                return await self._list_labels(arguments)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
                 
@@ -292,6 +341,154 @@ class OAuthGmailTools:
         ).execute()
         
         return {"success": True, "label_id": result["id"], "name": result["name"]}
+    
+    async def _read_email_content(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Read the full content/body of an email"""
+        email_id = args["id"]
+        format_preference = args.get("format", "text").lower()
+        
+        try:
+            # Get the full email message
+            message = self.gmail_service.users().messages().get(
+                userId='me',
+                id=email_id,
+                format='full'
+            ).execute()
+            
+            # Extract email content
+            content_info = self._extract_email_content(message, format_preference)
+            
+            return {
+                "success": True,
+                "email_id": email_id,
+                "content": content_info["content"],
+                "content_type": content_info["content_type"],
+                "has_attachments": content_info["has_attachments"],
+                "attachment_count": content_info["attachment_count"]
+            }
+            
+        except Exception as e:
+            return {"error": f"Failed to read email content: {e}"}
+    
+    async def _list_labels(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """List all Gmail labels"""
+        include_system = args.get("include_system_labels", True)
+        
+        try:
+            # Get all labels
+            results = self.gmail_service.users().labels().list(userId='me').execute()
+            labels = results.get('labels', [])
+            
+            # Process labels
+            processed_labels = []
+            for label in labels:
+                label_info = {
+                    "id": label["id"],
+                    "name": label["name"],
+                    "type": "system" if label["type"] == "system" else "user"
+                }
+                
+                # Filter system labels if requested
+                if not include_system and label_info["type"] == "system":
+                    continue
+                    
+                processed_labels.append(label_info)
+            
+            # Sort labels: user labels first, then system labels, alphabetically within each group
+            processed_labels.sort(key=lambda x: (x["type"] == "system", x["name"].lower()))
+            
+            return {
+                "success": True,
+                "labels": processed_labels,
+                "total_count": len(processed_labels),
+                "user_labels": [l for l in processed_labels if l["type"] == "user"],
+                "system_labels": [l for l in processed_labels if l["type"] == "system"]
+            }
+            
+        except Exception as e:
+            return {"error": f"Failed to list labels: {e}"}
+    
+    def _extract_email_content(self, message: Dict[str, Any], format_preference: str = "text") -> Dict[str, Any]:
+        """
+        Extract email content from Gmail API message response
+        
+        Args:
+            message: Gmail API message object
+            format_preference: 'text' or 'html'
+            
+        Returns:
+            Dictionary with content, content_type, and attachment info
+        """
+        content = ""
+        content_type = "text"
+        has_attachments = False
+        attachment_count = 0
+        
+        def extract_from_payload(payload):
+            nonlocal content, content_type, has_attachments, attachment_count
+            
+            # Check for attachments
+            if payload.get('filename'):
+                has_attachments = True
+                attachment_count += 1
+                return
+            
+            # Handle multipart messages
+            if payload.get('mimeType', '').startswith('multipart/'):
+                if 'parts' in payload:
+                    for part in payload['parts']:
+                        extract_from_payload(part)
+                return
+            
+            # Extract text content
+            mime_type = payload.get('mimeType', '')
+            if mime_type == 'text/plain' and format_preference == 'text':
+                if 'data' in payload.get('body', {}):
+                    import base64
+                    decoded_content = base64.urlsafe_b64decode(
+                        payload['body']['data']
+                    ).decode('utf-8', errors='ignore')
+                    content = decoded_content
+                    content_type = "text"
+            elif mime_type == 'text/html' and (format_preference == 'html' or not content):
+                if 'data' in payload.get('body', {}):
+                    import base64
+                    decoded_content = base64.urlsafe_b64decode(
+                        payload['body']['data']
+                    ).decode('utf-8', errors='ignore')
+                    
+                    if format_preference == 'html':
+                        content = decoded_content
+                        content_type = "html"
+                    else:
+                        # Convert HTML to plain text for voice reading
+                        import re
+                        # Simple HTML to text conversion
+                        text_content = re.sub(r'<[^>]+>', '', decoded_content)
+                        text_content = re.sub(r'\s+', ' ', text_content).strip()
+                        if not content:  # Only use if no plain text found
+                            content = text_content
+                            content_type = "text"
+        
+        # Start extraction from the message payload
+        if 'payload' in message:
+            extract_from_payload(message['payload'])
+        
+        # Fallback if no content found
+        if not content:
+            content = "[No readable content found in this email]"
+            content_type = "text"
+        
+        # Truncate very long content for voice reading
+        if len(content) > 2000:
+            content = content[:2000] + "... [Content truncated for voice reading. This email is longer than displayed.]"
+        
+        return {
+            "content": content,
+            "content_type": content_type,
+            "has_attachments": has_attachments,
+            "attachment_count": attachment_count
+        }
 
 
 def create_oauth_gmail_tools(gmail_service: Resource) -> List[types.Tool]:
