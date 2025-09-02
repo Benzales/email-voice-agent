@@ -101,7 +101,7 @@ export function useVoiceSession(backendUrl?: string, sessionId?: string): [Voice
           });
         },
 
-        onSessionStatus: (status: { status: SessionStatus; message?: string; progress?: any }) => {
+        onSessionStatus: (status: { status: SessionStatus; message?: string; progress?: unknown }) => {
           updateState({
             sessionStatus: status.status,
             statusMessage: status.message || `Status: ${status.status}`,

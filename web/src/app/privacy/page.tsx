@@ -129,7 +129,7 @@ export default function PrivacyPolicy() {
             
             <h3 className="text-xl font-semibold text-gray-800 mb-3">4.1 Voice Data Processing</h3>
             <ul className="list-disc list-inside text-gray-700 space-y-1 mb-6">
-              <li><strong>Real-time Processing:</strong> Voice commands are processed immediately through Google's Gemini Live API</li>
+              <li><strong>Real-time Processing:</strong> Voice commands are processed immediately through Google&apos;s Gemini Live API</li>
               <li><strong>No Permanent Storage:</strong> Voice recordings are not saved or stored after processing</li>
               <li><strong>Secure Transmission:</strong> All voice data is encrypted during transmission</li>
             </ul>
@@ -267,7 +267,7 @@ export default function PrivacyPolicy() {
           <hr className="my-8" />
 
           <section className="mb-8">
-            <h2 className="text-2xl font-semibold text-gray-900 mb-4">9. Children's Privacy</h2>
+            <h2 className="text-2xl font-semibold text-gray-900 mb-4">9. Children&apos;s Privacy</h2>
             <p className="text-gray-700">
               Our Service is not intended for use by children under 13 years of age. We do not knowingly collect personal information from children under 13. If we discover that we have collected information from a child under 13, we will delete that information immediately.
             </p>
