@@ -1,8 +1,8 @@
 # Privacy Policy
 ## Voice Email Agent
 
-**Effective Date:** [DATE]  
-**Last Updated:** [DATE]
+**Effective Date:** January 15, 2025  
+**Last Updated:** January 15, 2025
 
 ---
 
@@ -208,7 +208,7 @@ If you are a California resident, you have additional rights under the Californi
 - **Right to Opt-Out:** Opt-out of the sale of personal information (we do not sell data)
 - **Non-Discrimination:** We will not discriminate against you for exercising these rights
 
-To exercise these rights, contact us at [CONTACT_EMAIL].
+To exercise these rights, contact us at support@voiceemailagent.com.
 
 ---
 
@@ -223,7 +223,7 @@ If you are in the European Union, you have rights under the General Data Protect
 - **Right to Restrict Processing:** Limit how we process your data
 - **Right to Object:** Object to processing based on legitimate interests
 
-Contact us at [CONTACT_EMAIL] to exercise these rights.
+Contact us at support@voiceemailagent.com to exercise these rights.
 
 ---
 
@@ -242,9 +242,9 @@ Your continued use of the Service after any changes constitutes acceptance of th
 
 If you have any questions about this Privacy Policy or our privacy practices, please contact us:
 
-**Email:** [CONTACT_EMAIL]  
-**Website:** [WEBSITE_URL]  
-**Address:** [BUSINESS_ADDRESS]
+**Email:** support@voiceemailagent.com  
+**Website:** https://courier-black.vercel.app  
+**Mailing Address:** Available upon request
 
 For privacy-related requests, please include:
 - Your name and email address
@@ -257,8 +257,8 @@ We will respond to privacy requests within 30 days.
 
 ## 15. Effective Date
 
-This Privacy Policy is effective as of [EFFECTIVE_DATE] and will remain in effect except with respect to any changes in its provisions in the future, which will be in effect immediately after being posted on this page.
+This Privacy Policy is effective as of January 15, 2025 and will remain in effect except with respect to any changes in its provisions in the future, which will be in effect immediately after being posted on this page.
 
 ---
 
-*This Privacy Policy was last updated on [LAST_UPDATED_DATE].*
+*This Privacy Policy was last updated on January 15, 2025.*

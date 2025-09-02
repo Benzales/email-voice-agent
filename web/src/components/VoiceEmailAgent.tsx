@@ -235,6 +235,22 @@ export default function VoiceEmailAgent({ backendUrl }: VoiceEmailAgentProps) {
             🎤 Recording...
           </div>
         )}
+
+        {/* Footer */}
+        <footer className="mt-12 pt-8 border-t border-gray-200 text-center">
+          <div className="text-sm text-gray-500 space-x-4">
+            <a 
+              href="/privacy" 
+              className="hover:text-gray-700 transition-colors"
+            >
+              Privacy Policy
+            </a>
+            <span>•</span>
+            <span>Voice Email Agent</span>
+            <span>•</span>
+            <span>© 2025</span>
+          </div>
+        </footer>
       </div>
     </div>
   );
