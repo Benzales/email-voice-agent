@@ -553,6 +553,33 @@ cd web && npm run dev
 
 ### Production Deployment
 
+#### **Vercel Frontend Deployment Process**
+
+**From `add-ui` Branch (Current Development):**
+```bash
+# Install Vercel CLI
+npm install -g vercel
+
+# Deploy from web directory
+cd web
+vercel --prod
+
+# Fix any build errors (TypeScript/linting)
+npm run build  # Test locally first
+
+# Redeploy after fixes
+vercel --prod
+```
+
+**Build Requirements:**
+- All TypeScript errors must be resolved
+- Linting warnings are acceptable, but errors will fail deployment
+- Missing library files (audioUtils.ts, websocket/client.ts) must be present
+
+**Deployment URLs:**
+- **Production**: `https://courier-{hash}-{project}.vercel.app` (deployment-specific)
+- **Alias**: `https://courier-black.vercel.app` (may take time to update)
+
 #### **Backend (Fly.io)**
 - **FastAPI server**: Containerized with Docker for WebSocket and Gmail integration
 - **Global edge deployment**: Deployed on Fly.io for low-latency WebSocket connections
@@ -655,6 +682,7 @@ Gemini: "I've created a draft reply for you to review later."
 ### Functional Completeness
 - ✅ **Full voice workflow**: Speak → Action → Next email
 - ✅ **All Gmail actions**: Archive, trash, mark read/unread, read content, create drafts, label management, skip
+- ✅ **Privacy Policy**: Comprehensive privacy policy deployed and accessible
 - ✅ **Perfect audio**: Natural speech quality and recognition
 - ✅ **Reliable sessions**: Continuous listening and proper tool execution
 - ✅ **OAuth Authentication**: Complete Google OAuth 2.0 integration
@@ -713,7 +741,8 @@ The web-based voice email agent is now **fully deployed in production** with ent
 
 ## 🌐 **Live Production URLs**
 - **Primary**: https://courier-black.vercel.app (Clean project alias)
+- **Current**: https://courier-po0de60ss-benjamingonzales121102-1293s-projects.vercel.app (Latest deployment)
 - **Backend**: https://courier.fly.dev (Global Fly.io deployment)
-- **Alternative**: https://courier-{hash}-{project}.vercel.app (Deployment-specific URLs)
+- **Privacy Policy**: Available at `/privacy` on any frontend URL
 
 The application automatically handles authentication across all URLs with dynamic OAuth redirects, ensuring users never need to authenticate twice regardless of which URL they access.
