@@ -94,18 +94,23 @@ export function useVoiceSession(backendUrl?: string, sessionId?: string): [Voice
         },
 
         onError: (error) => {
+          const errorMessage = error instanceof Error ? error.message : String(error);
           updateState({
-            error,
-            statusMessage: `Error: ${error}`,
+            error: errorMessage,
+            statusMessage: `Error: ${errorMessage}`,
             sessionStatus: 'error'
           });
         },
 
         onSessionStatus: (status: { status: SessionStatus; message?: string; progress?: unknown }) => {
+          const progress = status.progress && typeof status.progress === 'object' && 
+                          'current' in status.progress && 'total' in status.progress && 'remaining' in status.progress
+                          ? status.progress as { current: number; total: number; remaining: number }
+                          : null;
           updateState({
             sessionStatus: status.status,
             statusMessage: status.message || `Status: ${status.status}`,
-            progress: status.progress || null
+            progress
           });
         },
 

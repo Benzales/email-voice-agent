@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from models import UserInfo, OAuthTokens, AuthStatus, AuthStatusResponse
 from oauth_service import get_oauth_service
+from user_database import get_user_database
 
 
 @dataclass
@@ -58,23 +59,30 @@ class UserSessionManager:
         self.session_timeout = timedelta(hours=session_timeout_hours)
         self.cleanup_interval = timedelta(minutes=cleanup_interval_minutes)
         self.oauth_service = get_oauth_service()
+        self.user_database = None  # Will be initialized async
         
         # Start cleanup task
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
         
         print(f"✅ User session manager initialized (timeout: {session_timeout_hours}h)")
     
-    async def create_session(self, tokens: OAuthTokens, user_info: UserInfo) -> str:
+    async def create_session(self, tokens: OAuthTokens, user_info: UserInfo, user_agent: Optional[str] = None, ip_address: Optional[str] = None) -> str:
         """
         Create a new user session
         
         Args:
             tokens: OAuth tokens for the user
             user_info: User information from Google
+            user_agent: User agent string for tracking
+            ip_address: IP address for tracking
             
         Returns:
             Session ID string
         """
+        # Initialize database if not already done
+        if self.user_database is None:
+            self.user_database = await get_user_database()
+        
         # Generate unique session ID
         session_id = secrets.token_urlsafe(32)
         
@@ -88,11 +96,18 @@ class UserSessionManager:
             tokens=tokens
         )
         
-        # Store session
+        # Store session in memory
         self.sessions[session_id] = session
         self.user_to_session[user_info.id] = session_id
         
-        print(f"✅ Created session for user: {user_info.email} (session: {session_id[:8]}...)")
+        # Store user info and login in database
+        try:
+            await self.user_database.create_or_update_user(user_info)
+            await self.user_database.record_login(user_info.id, session_id, user_agent, ip_address)
+            print(f"✅ Created session for user: {user_info.email} (session: {session_id[:8]}...) - recorded in database")
+        except Exception as e:
+            print(f"⚠️ Failed to record login in database: {e}")
+            print(f"✅ Created session for user: {user_info.email} (session: {session_id[:8]}...) - in-memory only")
         
         return session_id
     
@@ -249,13 +264,14 @@ class UserSessionManager:
         
         return await self.remove_session(session_id)
     
-    async def logout_session(self, session_id: str, revoke_tokens: bool = True) -> bool:
+    async def logout_session(self, session_id: str, revoke_tokens: bool = True, emails_processed: int = 0) -> bool:
         """
         Logout a user session
         
         Args:
             session_id: Session ID to logout
             revoke_tokens: Whether to revoke OAuth tokens with Google
+            emails_processed: Number of emails processed in this session
             
         Returns:
             True if successful, False otherwise
@@ -263,6 +279,13 @@ class UserSessionManager:
         session = self.sessions.get(session_id)
         if not session:
             return False
+        
+        # Record logout in database
+        if self.user_database:
+            try:
+                await self.user_database.record_logout(session_id, emails_processed)
+            except Exception as e:
+                print(f"⚠️ Failed to record logout in database: {e}")
         
         # Optionally revoke tokens with Google
         if revoke_tokens:
@@ -319,6 +342,10 @@ class UserSessionManager:
                 await self._cleanup_task
             except asyncio.CancelledError:
                 pass
+        
+        # Close database connection
+        if self.user_database:
+            await self.user_database.close()
         
         print("👋 User session manager shutdown")
 

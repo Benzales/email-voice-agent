@@ -258,7 +258,7 @@ async def oauth_callback(
             state=state
         )
         
-        # Create user session
+        # Create user session with tracking info
         session_id = await session_manager.create_session(tokens, user_info)
         
         # Decode the state to get the frontend origin
@@ -354,7 +354,157 @@ async def get_user_info(session_id: Optional[str] = Depends(get_current_session)
         raise HTTPException(status_code=500, detail=f"Failed to get user info: {str(e)}")
 
 
-# Removed /auth/sessions endpoint - security risk in production
+# Admin endpoints for user tracking
+@app.get("/admin/users")
+async def get_all_users(
+    limit: Optional[int] = Query(50, description="Maximum number of users to return"),
+    offset: int = Query(0, description="Number of users to skip"),
+    session_id: Optional[str] = Depends(get_current_session)
+):
+    """
+    Get all users with pagination (Admin endpoint)
+    Requires authentication
+    """
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Validate session
+        session_manager = get_session_manager()
+        auth_status = await session_manager.validate_session(session_id)
+        
+        if auth_status.status != AuthStatus.AUTHENTICATED:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        
+        # Get user database
+        from user_database import get_user_database
+        user_db = await get_user_database()
+        
+        # Get users
+        users = await user_db.get_all_users(limit=limit, offset=offset)
+        
+        return {
+            "users": [user.to_dict() for user in users],
+            "total_returned": len(users),
+            "offset": offset,
+            "limit": limit
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get users: {str(e)}")
+
+
+@app.get("/admin/users/{user_id}")
+async def get_user_details(
+    user_id: str,
+    session_id: Optional[str] = Depends(get_current_session)
+):
+    """
+    Get detailed user information including login history
+    Requires authentication
+    """
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Validate session
+        session_manager = get_session_manager()
+        auth_status = await session_manager.validate_session(session_id)
+        
+        if auth_status.status != AuthStatus.AUTHENTICATED:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        
+        # Get user database
+        from user_database import get_user_database
+        user_db = await get_user_database()
+        
+        # Get user and login history
+        user = await user_db.get_user(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        login_history = await user_db.get_user_login_history(user_id, limit=100)
+        
+        return {
+            "user": user.to_dict(),
+            "login_history": [login.to_dict() for login in login_history],
+            "total_login_records": len(login_history)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get user details: {str(e)}")
+
+
+@app.get("/admin/statistics")
+async def get_user_statistics(session_id: Optional[str] = Depends(get_current_session)):
+    """
+    Get overall user statistics
+    Requires authentication
+    """
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Validate session
+        session_manager = get_session_manager()
+        auth_status = await session_manager.validate_session(session_id)
+        
+        if auth_status.status != AuthStatus.AUTHENTICATED:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        
+        # Get user database
+        from user_database import get_user_database
+        user_db = await get_user_database()
+        
+        # Get statistics
+        stats = await user_db.get_user_statistics()
+        
+        # Add current session info
+        stats["current_active_sessions"] = session_manager.get_active_sessions_count()
+        stats["current_active_users"] = list(session_manager.get_active_users())
+        
+        return stats
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get statistics: {str(e)}")
+
+
+@app.post("/admin/cleanup")
+async def cleanup_old_data(
+    days: int = Query(90, description="Number of days to keep login history"),
+    session_id: Optional[str] = Depends(get_current_session)
+):
+    """
+    Clean up old login history records
+    Requires authentication
+    """
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    try:
+        # Validate session
+        session_manager = get_session_manager()
+        auth_status = await session_manager.validate_session(session_id)
+        
+        if auth_status.status != AuthStatus.AUTHENTICATED:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        
+        # Get user database
+        from user_database import get_user_database
+        user_db = await get_user_database()
+        
+        # Cleanup old data
+        await user_db.cleanup_old_sessions(days=days)
+        
+        return {
+            "success": True,
+            "message": f"Cleaned up login history older than {days} days"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cleanup data: {str(e)}")
 
 
 @app.websocket("/ws/voice-session")
