@@ -60,7 +60,7 @@ function OAuthCallbackContent() {
           // Clean up OAuth state
           sessionStorage.removeItem('oauth_state');
 
-          // Use the auth hook to handle the callback
+          // Use the auth hook to handle the callback (this will store the session ID)
           if (authOperations && 'handleOAuthCallback' in authOperations) {
             await (authOperations as { handleOAuthCallback: (sessionId: string) => Promise<void> }).handleOAuthCallback(sessionId);
           }
@@ -73,7 +73,7 @@ function OAuthCallbackContent() {
           // Redirect to main app after successful authentication
           setTimeout(() => {
             router.push('/');
-          }, 2000);
+          }, 1500); // Reduced timeout for better UX
           
           return;
         }

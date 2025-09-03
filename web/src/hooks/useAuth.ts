@@ -77,7 +77,10 @@ export function useAuth(): [AuthState, AuthOperations] {
   const checkAuthStatus = useCallback(async (sessionId?: string): Promise<void> => {
     const currentSessionId = sessionId || getStoredSessionId();
     
+    console.log('🔍 Checking auth status with session ID:', currentSessionId?.substring(0, 8) + '...' || 'None');
+    
     if (!currentSessionId) {
+      console.log('❌ No session ID found, setting unauthenticated state');
       updateAuthState({
         isAuthenticated: false,
         user: null,
@@ -98,7 +101,10 @@ export function useAuth(): [AuthState, AuthOperations] {
       if (response.ok) {
         const data = await response.json();
         
+        console.log('📡 Auth status response:', data.status);
+        
         if (data.status === 'authenticated') {
+          console.log('✅ Authentication successful for user:', data.user?.email);
           updateAuthState({
             isAuthenticated: true,
             user: data.user,
@@ -109,6 +115,7 @@ export function useAuth(): [AuthState, AuthOperations] {
             error: null,
           });
         } else {
+          console.log('❌ Authentication failed, status:', data.status);
           // Session invalid or expired
           storeSessionId(null);
           updateAuthState({
@@ -136,9 +143,12 @@ export function useAuth(): [AuthState, AuthOperations] {
       }
     } catch (error) {
       console.error('Auth status check failed:', error);
+      // If it's a network error, don't clear the session ID immediately
+      // The user might be temporarily offline
       updateAuthState({
         isLoading: false,
         error: 'Network error checking authentication',
+        isAuthenticated: false, // But still mark as not authenticated for UI purposes
       });
     }
   }, [getStoredSessionId, createAuthHeader, updateAuthState, storeSessionId]);
@@ -231,9 +241,20 @@ export function useAuth(): [AuthState, AuthOperations] {
 
   // Handle OAuth callback completion
   const handleOAuthCallback = useCallback(async (sessionId: string): Promise<void> => {
+    console.log('🔑 OAuth callback received session ID:', sessionId?.substring(0, 8) + '...');
+    
+    // Ensure we're not in loading state during callback
+    updateAuthState({ isLoading: true, error: null });
+    
     storeSessionId(sessionId);
+    console.log('💾 Session ID stored in localStorage');
+    
+    // Small delay to ensure localStorage is updated
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
     await checkAuthStatus(sessionId);
-  }, [storeSessionId, checkAuthStatus]);
+    console.log('✅ Auth status checked after OAuth callback');
+  }, [storeSessionId, checkAuthStatus, updateAuthState]);
 
   // Check authentication status on mount only
   useEffect(() => {

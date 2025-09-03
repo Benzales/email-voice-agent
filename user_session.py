@@ -86,8 +86,12 @@ class UserSessionManager:
         # Generate unique session ID
         session_id = secrets.token_urlsafe(32)
         
-        # Remove any existing session for this user
-        await self.remove_user_session(user_info.id)
+        # Remove any existing session for this user BEFORE generating new session ID
+        # This prevents race conditions where the old session ID is still in use
+        existing_session_id = self.user_to_session.get(user_info.id)
+        if existing_session_id:
+            print(f"🔄 Replacing existing session for user: {user_info.email}")
+            await self.remove_user_session(user_info.id)
         
         # Create new session
         session = UserSession(

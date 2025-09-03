@@ -665,6 +665,19 @@ Gemini: "I've created a draft reply for you to review later."
 - **Health Monitoring**: `/health` endpoint shows service status
 - **API Documentation**: `/docs` endpoint with interactive API docs
 
+### Common Production Issues
+
+#### **OAuth Session Persistence Failure**
+**Symptom**: Authentication succeeds but immediately reverts to login screen
+**Cause**: Multiple Fly.io machines running with in-memory session storage
+**Fix**: 
+```bash
+flyctl machines list  # Check for multiple machines
+flyctl machines stop <extra_machine_id>
+flyctl machines destroy <extra_machine_id> --force
+```
+**Prevention**: Ensure `max_machines_running = 1` in fly.toml for stateful apps
+
 ### Debugging Features
 - **Voice Detection**: Console shows when voice is detected
 - **Tool Execution**: Backend logs show all Gmail tool calls

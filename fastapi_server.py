@@ -95,16 +95,16 @@ app = FastAPI(
 )
 
 # Add CORS middleware for Next.js frontend
+# Note: Starlette's CORSMiddleware does not support wildcard patterns in allow_origins
+# so we use allow_origin_regex to allow any Vercel deployment subdomain.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",  # Next.js development
         "https://localhost:3000", # HTTPS local development
-        "https://courier-ktdswpwaf-benjamingonzales121102-1293s-projects.vercel.app",  # Production Vercel (old)
-        "https://courier-rgq51i636-benjamingonzales121102-1293s-projects.vercel.app",  # Production Vercel (new)
         "https://courier-black.vercel.app",  # Production alias
-        "https://*.vercel.app",   # Other Vercel deployments
     ],
+    allow_origin_regex=r"^https://.*\.vercel\.app$",  # Allow all Vercel deployments
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -260,6 +260,7 @@ async def oauth_callback(
         
         # Create user session with tracking info
         session_id = await session_manager.create_session(tokens, user_info)
+        print(f"🔑 Created new session ID: {session_id[:8]}... for user: {user_info.email}")
         
         # Decode the state to get the frontend origin
         import base64
@@ -288,7 +289,10 @@ async def get_auth_status(session_id: Optional[str] = Depends(get_current_sessio
     """
     Check authentication status for current session
     """
+    print(f"🔍 Auth status check - session_id: {session_id[:8] + '...' if session_id else 'None'}")
+    
     if not session_id:
+        print("❌ No session ID provided, returning unauthenticated")
         return AuthStatusResponse(
             status="unauthenticated",
             user=None,
@@ -299,9 +303,11 @@ async def get_auth_status(session_id: Optional[str] = Depends(get_current_sessio
     try:
         session_manager = get_session_manager()
         auth_status = await session_manager.validate_session(session_id)
+        print(f"✅ Auth validation result: {auth_status.status} for user: {auth_status.user.email if auth_status.user else 'None'}")
         return auth_status
         
     except Exception as e:
+        print(f"❌ Auth status check failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to check auth status: {str(e)}")
 
 
