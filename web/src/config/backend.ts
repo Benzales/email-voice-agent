@@ -3,9 +3,9 @@
  * Handles environment-specific URLs for API and WebSocket connections
  */
 
-// Production backend URLs (deployed to Fly.io)
-const PRODUCTION_BACKEND_URL = 'https://courier.fly.dev';
-const PRODUCTION_WS_URL = 'wss://courier.fly.dev/ws/voice-session';
+// Production backend URLs (custom subdomain on owned domain)
+const PRODUCTION_BACKEND_URL = 'https://api.courieragent.ai';
+const PRODUCTION_WS_URL = 'wss://api.courieragent.ai/ws/voice-session';
 
 // Development backend URLs (local development)
 const DEVELOPMENT_BACKEND_URL = 'http://localhost:8000';

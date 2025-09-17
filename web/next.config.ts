@@ -9,4 +9,5 @@ const nextConfig: NextConfig = {
     // Allow production builds to successfully complete even if there are TypeScript errors
     ignoreBuildErrors: true,
   },
+  // Redirects moved to vercel.json for better cross-deployment support
 };

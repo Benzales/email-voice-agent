@@ -296,7 +296,7 @@ export default function PrivacyPolicy() {
               <li><strong>Non-Discrimination:</strong> We will not discriminate against you for exercising these rights</li>
             </ul>
             <p className="text-gray-700">
-              To exercise these rights, contact us at <a href="mailto:support@voiceemailagent.com" className="text-blue-600 hover:underline">support@voiceemailagent.com</a>.
+              To exercise these rights, contact us at <a href="mailto:benjamingonzales121102@gmail.com" className="text-blue-600 hover:underline">benjamingonzales121102@gmail.com</a>.
             </p>
           </section>
 
@@ -316,7 +316,7 @@ export default function PrivacyPolicy() {
               <li><strong>Right to Object:</strong> Object to processing based on legitimate interests</li>
             </ul>
             <p className="text-gray-700">
-              Contact us at <a href="mailto:support@voiceemailagent.com" className="text-blue-600 hover:underline">support@voiceemailagent.com</a> to exercise these rights.
+              Contact us at <a href="mailto:benjamingonzales121102@gmail.com" className="text-blue-600 hover:underline">benjamingonzales121102@gmail.com</a> to exercise these rights.
             </p>
           </section>
 
@@ -346,8 +346,8 @@ export default function PrivacyPolicy() {
             </p>
             <div className="bg-gray-50 p-4 rounded-lg mb-4">
               <p className="text-gray-700">
-                <strong>Email:</strong> <a href="mailto:support@voiceemailagent.com" className="text-blue-600 hover:underline">support@voiceemailagent.com</a><br />
-                <strong>Website:</strong> <a href="https://courier-black.vercel.app" className="text-blue-600 hover:underline">https://courier-black.vercel.app</a><br />
+                <strong>Email:</strong> <a href="mailto:benjamingonzales121102@gmail.com" className="text-blue-600 hover:underline">benjamingonzales121102@gmail.com</a><br />
+                <strong>Website:</strong> <a href="https://courieragent.ai" className="text-blue-600 hover:underline">https://courieragent.ai</a><br />
                 <strong>Mailing Address:</strong> Available upon request
               </p>
             </div>

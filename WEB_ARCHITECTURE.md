@@ -588,7 +588,7 @@ vercel --prod
   - `GMAIL_CLIENT_ID` - Google OAuth client ID
   - `GMAIL_CLIENT_SECRET` - Google OAuth client secret  
   - `GMAIL_REDIRECT_URI` - OAuth callback URI (`https://courier.fly.dev/auth/callback`)
-  - `FRONTEND_URL` - Frontend domain for OAuth redirects (optional, auto-detected)
+  - `FRONTEND_URL` - Frontend domain for OAuth redirects (defaults to courieragent.ai)
 - **Port**: 8000 (configurable)
 - **Health checks**: `/health` endpoint for monitoring
 - **Scaling**: Single machine deployment with `max_machines_running = 1` for session persistence
@@ -601,9 +601,10 @@ vercel --prod
   - `NEXT_PUBLIC_WS_URL` - WebSocket URL (defaults to `wss://courier.fly.dev/ws/voice-session`)
 - **CDN**: Global distribution via Vercel's edge network
 - **HTTPS**: Required for microphone access and OAuth security
-- **Multiple URLs**: 
-  - Production deployment: `https://courier-{hash}-{project}.vercel.app`
-  - Project alias: `https://courier-black.vercel.app` (cleaner URL)
+- **Custom Domain**: `https://courieragent.ai` (verified domain for Google OAuth)
+- **Legacy URLs**: 
+  - `https://courier-black.vercel.app` → redirects to courieragent.ai
+  - `https://courier-{hash}-{project}.vercel.app` → redirects to courieragent.ai
 - **Dynamic OAuth redirects**: Backend automatically redirects to correct domain
 
 #### **Architecture Benefits**
@@ -804,9 +805,11 @@ All admin endpoints require authentication via `Authorization: Bearer {session_i
 The web-based voice email agent is now **fully deployed in production** with enterprise-grade security and global accessibility. The application provides OAuth authentication protecting all expensive operations, while maintaining the streamlined voice-first user experience. Multiple users can securely access their personal Gmail accounts through natural voice commands **without risk of unauthorized cost abuse**.
 
 ## 🌐 **Live Production URLs**
-- **Primary**: https://courier-black.vercel.app (Clean project alias)
-- **Current**: https://courier-po0de60ss-benjamingonzales121102-1293s-projects.vercel.app (Latest deployment)
+- **Primary**: https://courieragent.ai (Verified custom domain for Google OAuth)
 - **Backend**: https://courier.fly.dev (Global Fly.io deployment)
-- **Privacy Policy**: Available at `/privacy` on any frontend URL
+- **Privacy Policy**: https://courieragent.ai/privacy (Required for Google OAuth verification)
+- **Legacy URLs**: 
+  - https://courier-black.vercel.app → redirects to courieragent.ai
+  - https://courier-{hash}-{project}.vercel.app → redirects to courieragent.ai
 
 The application automatically handles authentication across all URLs with dynamic OAuth redirects, ensuring users never need to authenticate twice regardless of which URL they access.

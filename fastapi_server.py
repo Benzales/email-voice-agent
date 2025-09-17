@@ -102,7 +102,9 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",  # Next.js development
         "https://localhost:3000", # HTTPS local development
-        "https://courier-black.vercel.app",  # Production alias
+            "https://courieragent.ai",  # Production custom domain
+        "https://www.courieragent.ai",  # WWW subdomain
+        "https://courier-black.vercel.app",  # Legacy production alias
     ],
     allow_origin_regex=r"^https://.*\.vercel\.app$",  # Allow all Vercel deployments
     allow_credentials=True,
@@ -208,7 +210,7 @@ async def login(request: LoginRequest, http_request: Request):
         origin = http_request.headers.get("origin")
         if not origin:
             # Fallback to environment variable or localhost
-            origin = os.getenv("FRONTEND_URL", "http://localhost:3000")
+            origin = os.getenv("FRONTEND_URL", "https://courieragent.ai")
         
         # Create state with both user state and frontend origin
         state_data = {
@@ -266,7 +268,7 @@ async def oauth_callback(
         import base64
         import json
         
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")  # Default fallback
+        frontend_url = os.getenv("FRONTEND_URL", "https://courieragent.ai")  # Default fallback
         
         if state:
             try:

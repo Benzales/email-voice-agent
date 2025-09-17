@@ -208,7 +208,7 @@ If you are a California resident, you have additional rights under the Californi
 - **Right to Opt-Out:** Opt-out of the sale of personal information (we do not sell data)
 - **Non-Discrimination:** We will not discriminate against you for exercising these rights
 
-To exercise these rights, contact us at support@voiceemailagent.com.
+To exercise these rights, contact us at benjamingonzales121102@gmail.com.
 
 ---
 
@@ -223,7 +223,7 @@ If you are in the European Union, you have rights under the General Data Protect
 - **Right to Restrict Processing:** Limit how we process your data
 - **Right to Object:** Object to processing based on legitimate interests
 
-Contact us at support@voiceemailagent.com to exercise these rights.
+Contact us at benjamingonzales121102@gmail.com to exercise these rights.
 
 ---
 
@@ -242,8 +242,8 @@ Your continued use of the Service after any changes constitutes acceptance of th
 
 If you have any questions about this Privacy Policy or our privacy practices, please contact us:
 
-**Email:** support@voiceemailagent.com  
-**Website:** https://courier-black.vercel.app  
+**Email:** benjamingonzales121102@gmail.com  
+**Website:** https://courieragent.ai  
 **Mailing Address:** Available upon request
 
 For privacy-related requests, please include:
