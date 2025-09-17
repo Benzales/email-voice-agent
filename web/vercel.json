@@ -1,0 +1,15 @@
+{
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "(.*\\.vercel\\.app)"
+        }
+      ],
+      "destination": "https://courieragent.ai/$1",
+      "permanent": true
+    }
+  ]
+}

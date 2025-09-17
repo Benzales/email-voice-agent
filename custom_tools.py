@@ -58,4 +58,8 @@ class EmailNavigationTools:
     
     def reset_session_state(self):
         """Reset the session state for a new session"""
-        self.session_should_end = False 
+        self.session_should_end = False
+    
+    def end_session(self):
+        """End the current session"""
+        self.session_should_end = True 

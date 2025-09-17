@@ -1,0 +1,25 @@
+# FastAPI server dependencies
+# Add these to your existing pyproject.toml or install separately
+
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+pydantic>=2.5.0
+
+# CORS support for frontend
+python-multipart>=0.0.6
+
+# OAuth and Google API support
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+google-api-python-client>=2.108.0
+
+# Session management
+python-jose[cryptography]>=3.3.0
+
+# Already in your project (from pyproject.toml):
+# google-genai
+# mcp-agent
+# python-dotenv
+# asyncio (built-in)
